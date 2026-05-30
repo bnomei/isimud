@@ -1,5 +1,5 @@
 [package]
-name = "isimud"
+name = "isimud-text-to-speech"
 version = "0.1.0"
 authors = ["Bruno Meilick <b@bnomei.com>"]
 edition = "2021"
@@ -9,7 +9,7 @@ description = "AI-native macOS menu bar text-to-speech and MCP server for agents
 readme = "README.md"
 repository = "https://github.com/bnomei/isimud"
 homepage = "https://github.com/bnomei/isimud"
-documentation = "https://docs.rs/isimud"
+documentation = "https://docs.rs/isimud-text-to-speech"
 keywords = ["text-to-speech", "tts", "macos", "mcp", "voice"]
 default-run = "isimud"
 autobins = false
