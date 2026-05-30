@@ -66,22 +66,6 @@ voice = "onyx"
 The bind address is loopback-only unless `[server].allow_remote = true` **and** an auth token
 is set.
 
-## Development
-
-```sh
-cargo test
-cargo clippy --all-targets --all-features -- -D warnings
-cargo fmt --all
-prek run --all-files     # fmt + clippy pre-commit hooks
-```
-
-### Packaging (macOS)
-
-```sh
-TARGET=aarch64-apple-darwin scripts/build-release.sh
-scripts/package-macos-app.sh   # builds dist/Isimud.app (+ .zip)
-```
-
 ## License
 
 MIT — see [LICENSE](LICENSE).
