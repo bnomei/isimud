@@ -29,7 +29,7 @@ async-trait = "0.1"
 axum = "0.8"
 base64 = "0.22"
 dotenvy = "0.15"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls"] }
 rmcp = { version = "1.7", features = ["server", "macros", "transport-streamable-http-server", "transport-streamable-http-server-session", "tower"] }
 rodio = "0.22.2"
 schemars = "1"
