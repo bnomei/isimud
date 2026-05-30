@@ -1,0 +1,60 @@
+# isimud sample config. Copy this file to your resolved config path.
+# Path precedence: ISIMUD_CONFIG -> $XDG_CONFIG_HOME/isimud/config.toml -> ~/.config/isimud/config.toml
+
+[app]
+# Run the menu bar tray. Set false (or pass --headless) for a pure MCP server.
+menubar = true
+# Install/remove a macOS LaunchAgent so isimud starts at login.
+autostart = false
+
+[server]
+# MCP streamable-HTTP server. 3654 = T9 "ENKI" (registered range 1024-49151).
+host = "127.0.0.1"
+port = 3654
+path = "/mcp"
+# Bind to a non-loopback address (requires auth_token). Loopback-only by default.
+allow_remote = false
+# Optional bearer token required on MCP requests. Empty = no auth (loopback only).
+# auth_token = "set via ISIMUD_AUTH_TOKEN"
+
+[tts]
+# Availability / fallback order when a named voice's provider is unavailable.
+providers = ["apple", "openai", "google"]
+# Named voice used for a plain speak(text) call with no explicit voice.
+default_voice = "default"
+# Global default speaking rate as a neutral multiplier (1.0 = normal).
+rate = 1.0
+
+# Named voices are the primary abstraction. Each maps to a provider + provider-specific voice.
+[voices.default]
+provider = "apple"
+voice = "Samantha" # Apple voice name/identifier; omit to use the macOS system default.
+
+[voices.narrator]
+provider = "openai"
+voice = "onyx"
+
+[voices.googler]
+provider = "google"
+voice = "en-US-Neural2-C"
+language = "en-US"
+
+# Provider blocks hold non-voice settings (model, endpoint, language defaults, credentials).
+[providers.apple]
+# language = "en-US" # BCP-47 language for the system default voice when voice is unset.
+
+[providers.openai]
+# api_key = "set via OPENAI_API_KEY"
+endpoint = "https://api.openai.com/v1/audio/speech"
+model = "gpt-4o-mini-tts"
+response_format = "wav"
+
+[providers.google]
+# api_key = "set via GOOGLE_API_KEY"
+endpoint = "https://texttospeech.googleapis.com/v1/text:synthesize"
+language = "en-US"
+audio_encoding = "LINEAR16"
+
+[logging]
+# Base level when RUST_LOG is unset. Targets: runtime, server, provider, config, speech.
+level = "info"

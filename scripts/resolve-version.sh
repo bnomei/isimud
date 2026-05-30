@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${GITHUB_REF_NAME:-}" == v* ]]; then
+  version="${GITHUB_REF_NAME#v}"
+else
+  version="$(python3 - <<'PY'
+import json
+import subprocess
+
+meta = json.loads(
+    subprocess.check_output(["cargo", "metadata", "--no-deps", "--format-version", "1"])
+)
+
+packages = meta["packages"]
+if len(packages) != 1:
+    raise SystemExit(f"expected exactly one package, found {len(packages)}")
+
+print(packages[0]["version"])
+PY
+)"
+fi
+
+if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+  echo "version=${version}" >> "$GITHUB_OUTPUT"
+else
+  echo "$version"
+fi
