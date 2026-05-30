@@ -13,8 +13,10 @@ use crate::voices::ResolvedSpeech;
 /// Default voice when a named voice does not specify a provider voice id.
 const DEFAULT_VOICE: &str = "alloy";
 /// Built-in voices advertised by the OpenAI speech API.
-const KNOWN_VOICES: &[&str] =
-    &["alloy", "ash", "ballad", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer"];
+const KNOWN_VOICES: &[&str] = &[
+    "alloy", "ash", "ballad", "cedar", "coral", "echo", "fable", "marin", "nova", "onyx", "sage",
+    "shimmer", "verse",
+];
 
 /// OpenAI cloud TTS backend.
 pub struct OpenAiProvider {
