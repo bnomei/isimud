@@ -50,7 +50,7 @@ objc2-avf-audio = { version = "0.3.2", features = ["AVSpeechSynthesis", "block2"
 objc2-foundation = { version = "0.3.2", features = ["NSArray", "NSString"] }
 tao = "0.35"
 tracing-oslog = "0.3.0"
-tray-icon = "0.21"
+tray-icon = "0.24"
 
 [dev-dependencies]
 tempfile = "3.27.0"
