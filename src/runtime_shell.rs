@@ -40,7 +40,23 @@ pub fn run(config: AppConfig, headless: bool) -> Result<()> {
     let (shutdown_tx, _shutdown_rx) = broadcast::channel::<()>(8);
 
     let guard = runtime.enter();
-    let _worker = engine.start();
+    let worker = engine.start();
+    let supervisor_engine = engine.clone();
+    let supervisor: JoinHandle<()> = runtime.spawn(async move {
+        match worker.await {
+            Ok(()) if supervisor_engine.is_shutdown() => {
+                info!(target: TARGET_RUNTIME, "speech worker stopped during shutdown");
+            }
+            Ok(()) => {
+                error!(target: TARGET_RUNTIME, "speech worker exited unexpectedly");
+                supervisor_engine.mark_degraded("speech worker exited unexpectedly");
+            }
+            Err(error) => {
+                error!(target: TARGET_RUNTIME, %error, "speech worker task join error");
+                supervisor_engine.mark_degraded(format!("speech worker task join error: {error}"));
+            }
+        }
+    });
     let server_engine = engine.clone();
     let server_shutdown = shutdown_tx.clone();
     let server_handle: JoinHandle<Result<(), ServerError>> =
@@ -49,15 +65,16 @@ pub fn run(config: AppConfig, headless: bool) -> Result<()> {
 
     let menubar = config.app.menubar && !headless;
     if !menubar {
-        return run_headless(&runtime, server_handle, &shutdown_tx);
+        return run_headless(&runtime, server_handle, supervisor, &shutdown_tx);
     }
-    run_tray(runtime, engine, shutdown_tx, server_handle)
+    run_tray(runtime, engine, shutdown_tx, server_handle, supervisor)
 }
 
 /// Headless mode: serve until Ctrl-C, then shut the server down gracefully.
 fn run_headless(
     runtime: &tokio::runtime::Runtime,
     server_handle: JoinHandle<Result<(), ServerError>>,
+    supervisor: JoinHandle<()>,
     shutdown_tx: &broadcast::Sender<()>,
 ) -> Result<()> {
     info!(target: TARGET_RUNTIME, "running headless (menu bar disabled)");
@@ -72,6 +89,7 @@ fn run_headless(
             Ok(Err(error)) => error!(target: TARGET_RUNTIME, %error, "MCP server error"),
             Err(error) => error!(target: TARGET_RUNTIME, %error, "MCP server task join error"),
         }
+        supervisor.abort();
     });
     Ok(())
 }
@@ -82,6 +100,7 @@ fn run_tray(
     engine: SpeechEngine,
     shutdown_tx: broadcast::Sender<()>,
     server_handle: JoinHandle<Result<(), ServerError>>,
+    supervisor: JoinHandle<()>,
 ) -> Result<()> {
     let mut event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     #[cfg(target_os = "macos")]
@@ -93,6 +112,7 @@ fn run_tray(
     let mut tray: Option<crate::runtime_tray::Tray> = None;
     let mut indicator = IndicatorState::Idle;
     let mut pulse_on = true;
+    let mut degraded = false;
     let mut server_handle = Some(server_handle);
 
     info!(target: TARGET_RUNTIME, "starting menu bar event loop");
@@ -110,7 +130,7 @@ fn run_tray(
                                 let _ = menu_proxy.send_event(UserEvent::Quit);
                             }
                         }));
-                        built.update(IndicatorState::Idle, true);
+                        built.update(IndicatorState::Idle, true, degraded);
                         tray = Some(built);
                     }
                     Err(error) => {
@@ -160,19 +180,26 @@ fn run_tray(
                 }
             }
             Event::UserEvent(UserEvent::Speech(event)) => {
+                if let SpeechEvent::Degraded { .. } = event {
+                    degraded = true;
+                    if let Some(tray) = tray.as_ref() {
+                        tray.update(indicator, pulse_on, degraded);
+                    }
+                    return;
+                }
                 let next = match event {
                     SpeechEvent::Started { .. } => Some(IndicatorState::Speaking),
                     SpeechEvent::Finished { .. }
                     | SpeechEvent::Failed { .. }
                     | SpeechEvent::Stopped { .. } => Some(IndicatorState::Idle),
-                    SpeechEvent::Enqueued { .. } => None,
+                    SpeechEvent::Enqueued { .. } | SpeechEvent::Degraded { .. } => None,
                 };
                 if let Some(next) = next {
                     if next != indicator {
                         indicator = next;
                         pulse_on = true;
                         if let Some(tray) = tray.as_ref() {
-                            tray.update(indicator, pulse_on);
+                            tray.update(indicator, pulse_on, degraded);
                         }
                     }
                 }
@@ -180,7 +207,7 @@ fn run_tray(
             Event::UserEvent(UserEvent::Tick) if indicator == IndicatorState::Speaking => {
                 pulse_on = !pulse_on;
                 if let Some(tray) = tray.as_ref() {
-                    tray.update(indicator, pulse_on);
+                    tray.update(indicator, pulse_on, degraded);
                 }
             }
             Event::UserEvent(UserEvent::Quit) => {
@@ -204,5 +231,6 @@ fn run_tray(
         // Keep the runtime and engine alive for the lifetime of the event loop.
         let _ = &runtime;
         let _ = &engine;
+        let _ = &supervisor;
     })
 }

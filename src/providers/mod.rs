@@ -16,9 +16,11 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde::Serialize;
 use thiserror::Error;
+use tracing::{info, warn};
 
 use crate::config::{AppConfig, ProviderKind};
 use crate::voices::ResolvedSpeech;
+use crate::TARGET_PROVIDER;
 
 /// A cooperative cancellation flag shared with providers and the playback sink.
 ///
@@ -104,6 +106,11 @@ pub struct ProviderRegistry {
 }
 
 impl ProviderRegistry {
+    /// Build a registry from explicitly supplied providers (primarily for in-crate tests).
+    pub fn from_providers(providers: HashMap<ProviderKind, Arc<dyn TtsProvider>>) -> Self {
+        Self { providers }
+    }
+
     /// Build the registry from configuration. Apple is only present on macOS.
     pub fn from_config(config: &AppConfig) -> Self {
         let mut providers: HashMap<ProviderKind, Arc<dyn TtsProvider>> = HashMap::new();
@@ -129,7 +136,7 @@ impl ProviderRegistry {
             )),
         );
 
-        Self { providers }
+        Self::from_providers(providers)
     }
 
     /// Look up a provider by kind.
@@ -154,6 +161,13 @@ impl ProviderRegistry {
             if provider.is_available().await {
                 return Some((provider, resolved.clone()));
             }
+        } else {
+            warn!(
+                target: TARGET_PROVIDER,
+                requested = ?resolved.provider,
+                voice = resolved.voice_id.as_deref().unwrap_or("<provider-default>"),
+                "preferred voice provider is not configured; considering fallback providers"
+            );
         }
 
         for &kind in order {
@@ -165,6 +179,13 @@ impl ProviderRegistry {
                     let mut fallback = resolved.clone();
                     fallback.provider = kind;
                     fallback.voice_id = None;
+                    info!(
+                        target: TARGET_PROVIDER,
+                        requested = ?resolved.provider,
+                        substituted = ?kind,
+                        voice = resolved.voice_id.as_deref().unwrap_or("<provider-default>"),
+                        "voice/provider unavailable; silently substituting"
+                    );
                     return Some((provider, fallback));
                 }
             }

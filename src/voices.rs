@@ -2,6 +2,8 @@
 //!
 //! Resolves a `SpeakRequest` into a concrete provider + provider-specific voice id using the
 //! `[voices.<name>]` table, `[tts].default_voice`, and the `[tts].providers` fallback order.
+//! Cloud-provider audio volume is applied in the shared rodio playback path; Apple `say`
+//! playback cannot currently honor volume, and only Google receives a pitch parameter.
 
 use thiserror::Error;
 
@@ -33,8 +35,8 @@ pub struct ResolvedSpeech {
     pub rate: f32,
     /// Optional pitch multiplier.
     pub pitch: Option<f32>,
-    /// Optional volume (0.0–1.0).
-    pub volume: Option<f32>,
+    /// Effective playback volume. The shared rodio path honors this; Apple `say` cannot.
+    pub volume: f32,
     /// The text to speak.
     pub text: String,
 }
@@ -51,7 +53,8 @@ pub enum VoiceResolveError {
 /// Resolve a [`SpeakRequest`] against the configuration.
 ///
 /// The requested voice (or `[tts].default_voice`) must exist in `[voices.*]`. The effective
-/// rate is the request override, then the voice's `rate`, then `[tts].rate`.
+/// rate is the request override, then the voice's `rate`, then `[tts].rate`. Effective volume
+/// comes from the voice's `volume`, falling back to neutral `1.0`.
 pub fn resolve_speech(
     config: &AppConfig,
     request: &SpeakRequest,
@@ -68,6 +71,7 @@ pub fn resolve_speech(
         .ok_or_else(|| VoiceResolveError::UnknownVoice(voice_name.clone()))?;
 
     let rate = request.rate.or(voice.rate).unwrap_or(config.tts.rate);
+    let volume = voice.volume.unwrap_or(1.0);
 
     let language = voice.language.clone().or_else(|| match voice.provider {
         ProviderKind::Apple => config.providers.apple.language.clone(),
@@ -82,7 +86,7 @@ pub fn resolve_speech(
         language,
         rate,
         pitch: voice.pitch,
-        volume: voice.volume,
+        volume,
         text: request.text.clone(),
     })
 }

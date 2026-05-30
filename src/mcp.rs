@@ -5,12 +5,13 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use rmcp::{
     handler::server::wrapper::Parameters,
     model::{
-        CustomNotification, CustomRequest, CustomResult, InitializeRequestParams, InitializeResult,
-        ServerCapabilities, ServerInfo, ServerNotification,
+        CustomNotification, CustomRequest, CustomResult, ErrorCode, InitializeRequestParams,
+        InitializeResult, ServerCapabilities, ServerInfo, ServerNotification,
     },
     tool, tool_handler, tool_router,
     transport::{
@@ -22,16 +23,19 @@ use rmcp::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, RwLock};
+use tokio::time::timeout;
 
 use crate::state::{JobOutcome, SpeechEvent, SpeechState};
-use crate::voices::{SpeakRequest, VoiceResolveError};
-use crate::worker::{SpeechEngine, VoiceCatalog};
+use crate::voices::SpeakRequest;
+use crate::worker::{EnqueueError, SpeechEngine, VoiceCatalog};
 
 /// Streamable HTTP service type for mounting on `/mcp` with axum/tower.
 pub type IsimudMcpService = StreamableHttpService<IsimudMcp, LocalSessionManager>;
 
 /// Maximum number of peers tracked for notification fan-out.
 const MAX_MCP_PEERS: usize = 64;
+/// Server-defined JSON-RPC error code used when the speech queue is full.
+const QUEUE_FULL: i32 = -32010;
 
 /// Errors that can occur while initializing the MCP server.
 #[derive(Debug, thiserror::Error)]
@@ -172,8 +176,15 @@ fn event_to_notification(event: &SpeechEvent) -> ServerNotification {
     ))
 }
 
-fn map_resolve_error(error: VoiceResolveError) -> McpError {
-    McpError::invalid_params(error.to_string(), None)
+fn map_enqueue_error(error: EnqueueError) -> McpError {
+    match error {
+        EnqueueError::Resolve(error) => McpError::invalid_params(error.to_string(), None),
+        EnqueueError::QueueFull { depth, capacity } => McpError::new(
+            ErrorCode(QUEUE_FULL),
+            format!("speech queue is full ({depth}/{capacity})"),
+            Some(serde_json::json!({ "queue_depth": depth, "capacity": capacity })),
+        ),
+    }
 }
 
 /// Parameters for `isimud.speak`.
@@ -199,7 +210,7 @@ pub struct SpeakResult {
     pub job_id: String,
     /// Queue depth observed after enqueueing.
     pub queue_depth: usize,
-    /// Terminal outcome (`completed`/`failed`/`cancelled`), only when `wait` was true.
+    /// Terminal outcome (`completed`/`failed`/`cancelled`/`timeout`), only when `wait` was true.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outcome: Option<String>,
     /// Error detail when `outcome == "failed"`.
@@ -233,6 +244,8 @@ pub struct StatusResult {
     pub provider: Option<String>,
     /// Jobs waiting in the queue (excluding the active one).
     pub queue_depth: usize,
+    /// Whether speech has entered a degraded health state and needs user attention.
+    pub degraded: bool,
 }
 
 fn outcome_fields(outcome: JobOutcome) -> (Option<String>, Option<String>) {
@@ -264,11 +277,26 @@ impl IsimudMcp {
 
         if params.wait.unwrap_or(false) {
             let (job_id, receiver) =
-                self.engine.enqueue_and_wait(request).map_err(map_resolve_error)?;
-            let outcome = receiver.await.map_err(|_| {
-                McpError::internal_error("speech job dropped before completion", None)
-            })?;
-            let (outcome, error) = outcome_fields(outcome);
+                self.engine.enqueue_and_wait(request).map_err(map_enqueue_error)?;
+            let wait_timeout_secs = self.engine.wait_timeout_secs();
+            let outcome = if wait_timeout_secs == 0 {
+                Some(receiver.await.map_err(|_| {
+                    McpError::internal_error("speech job dropped before completion", None)
+                })?)
+            } else {
+                match timeout(Duration::from_secs(wait_timeout_secs), receiver).await {
+                    Ok(Ok(outcome)) => Some(outcome),
+                    Ok(Err(_)) => {
+                        return Err(McpError::internal_error(
+                            "speech job dropped before completion",
+                            None,
+                        ));
+                    }
+                    Err(_) => None,
+                }
+            };
+            let (outcome, error) =
+                outcome.map(outcome_fields).unwrap_or_else(|| (Some("timeout".to_string()), None));
             Ok(Json(SpeakResult {
                 job_id: job_id.to_string(),
                 queue_depth: self.engine.queue_depth(),
@@ -276,7 +304,7 @@ impl IsimudMcp {
                 error,
             }))
         } else {
-            let job_id = self.engine.enqueue(request).map_err(map_resolve_error)?;
+            let job_id = self.engine.enqueue(request).map_err(map_enqueue_error)?;
             Ok(Json(SpeakResult {
                 job_id: job_id.to_string(),
                 queue_depth: self.engine.queue_depth(),
@@ -339,6 +367,7 @@ impl IsimudMcp {
                 voice: None,
                 provider: None,
                 queue_depth: snapshot.queue_depth,
+                degraded: snapshot.degraded,
             },
             SpeechState::Speaking { job_id, voice, provider } => StatusResult {
                 state: "speaking".to_string(),
@@ -346,6 +375,7 @@ impl IsimudMcp {
                 voice: Some(voice),
                 provider: Some(provider),
                 queue_depth: snapshot.queue_depth,
+                degraded: snapshot.degraded,
             },
         };
         Ok(Json(result))

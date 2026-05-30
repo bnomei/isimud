@@ -94,6 +94,20 @@ pub struct TtsConfig {
     pub default_voice: String,
     /// Global default speaking rate as a neutral multiplier (1.0 = normal).
     pub rate: f32,
+    /// Maximum queued jobs waiting behind the active job; 0 disables the limit.
+    #[serde(default = "default_max_queue_depth")]
+    pub max_queue_depth: usize,
+    /// Seconds `wait=true` MCP calls wait for a terminal outcome; 0 waits forever.
+    #[serde(default = "default_wait_timeout_secs")]
+    pub wait_timeout_secs: u64,
+}
+
+fn default_max_queue_depth() -> usize {
+    64
+}
+
+fn default_wait_timeout_secs() -> u64 {
+    0
 }
 
 impl Default for TtsConfig {
@@ -102,6 +116,8 @@ impl Default for TtsConfig {
             providers: vec![ProviderKind::Apple, ProviderKind::OpenAi, ProviderKind::Google],
             default_voice: "default".to_string(),
             rate: 1.0,
+            max_queue_depth: default_max_queue_depth(),
+            wait_timeout_secs: default_wait_timeout_secs(),
         }
     }
 }

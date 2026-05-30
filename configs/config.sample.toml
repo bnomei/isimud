@@ -24,6 +24,10 @@ providers = ["apple", "openai", "google"]
 default_voice = "default"
 # Global default speaking rate as a neutral multiplier (1.0 = normal).
 rate = 1.0
+# Maximum queued jobs waiting behind the active job; 0 disables the limit.
+max_queue_depth = 64
+# Seconds wait=true MCP calls wait for completion; 0 waits forever.
+wait_timeout_secs = 0
 
 # Named voices are the primary abstraction. Each maps to a provider + provider-specific voice.
 [voices.default]

@@ -29,6 +29,7 @@ impl SpeechState {
 pub struct StatusSnapshot {
     pub state: SpeechState,
     pub queue_depth: usize,
+    pub degraded: bool,
 }
 
 /// Lifecycle events emitted by the speech worker and broadcast to subscribers
@@ -52,6 +53,8 @@ pub enum SpeechEvent {
     Failed { job_id: Uuid, error: String, queue_depth: usize },
     /// Speech was stopped: the active job (if any) was cancelled and the queue cleared.
     Stopped { cancelled_job: Option<Uuid>, cleared: usize },
+    /// The speech subsystem entered a degraded health state and needs user attention.
+    Degraded { reason: String },
 }
 
 impl SpeechEvent {
@@ -70,12 +73,13 @@ impl SpeechEvent {
                 Some(job_id) => format!("stopped {job_id}, cleared {cleared} queued"),
                 None => format!("stopped (idle), cleared {cleared} queued"),
             },
+            SpeechEvent::Degraded { reason } => format!("degraded: {reason}"),
         }
     }
 }
 
 /// Outcome reported back to a caller that requested `wait = true`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum JobOutcome {
     Completed,

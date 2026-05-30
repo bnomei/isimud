@@ -25,14 +25,19 @@ pub enum PlaybackError {
 }
 
 /// Decode and play encoded audio bytes, blocking (on a worker thread) until the clip ends or
-/// `cancel` is tripped. rodio auto-detects the container/codec from the byte stream.
-pub async fn play_audio(bytes: Vec<u8>, cancel: CancelToken) -> Result<(), PlaybackError> {
-    tokio::task::spawn_blocking(move || play_blocking(bytes, &cancel))
+/// `cancel` is tripped. rodio auto-detects the container/codec from the byte stream and applies
+/// the resolved volume before playback begins.
+pub async fn play_audio(
+    bytes: Vec<u8>,
+    cancel: CancelToken,
+    volume: f32,
+) -> Result<(), PlaybackError> {
+    tokio::task::spawn_blocking(move || play_blocking(bytes, &cancel, volume))
         .await
         .map_err(|error| PlaybackError::Decode(format!("playback task join error: {error}")))?
 }
 
-fn play_blocking(bytes: Vec<u8>, cancel: &CancelToken) -> Result<(), PlaybackError> {
+fn play_blocking(bytes: Vec<u8>, cancel: &CancelToken, volume: f32) -> Result<(), PlaybackError> {
     if cancel.is_cancelled() {
         return Err(PlaybackError::Cancelled);
     }
@@ -44,6 +49,7 @@ fn play_blocking(bytes: Vec<u8>, cancel: &CancelToken) -> Result<(), PlaybackErr
 
     let player = rodio::play(device.mixer(), Cursor::new(bytes))
         .map_err(|error| PlaybackError::Decode(error.to_string()))?;
+    player.set_volume(volume);
 
     loop {
         if cancel.is_cancelled() {

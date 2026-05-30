@@ -115,3 +115,13 @@ BYOK provider keys via env (`OPENAI_API_KEY`, `GOOGLE_API_KEY`) with config fall
   behind the main-thread run loop.
 - `[tts].rate` is a neutral multiplier (1.0 = normal): Apple maps it to `say -r` WPM, OpenAI to
   `speed`, Google to `speakingRate`.
+- Effective `volume` is applied in the shared rodio playback path (cloud providers) via
+  `Player::set_volume`; the Apple `say` path cannot apply volume/pitch and logs this once.
+- `[tts].max_queue_depth` bounds queued jobs (0 = unbounded); a full queue yields a server-defined
+  MCP error (code `-32010`). `[tts].wait_timeout_secs` bounds `wait=true` calls (0 = wait forever);
+  on timeout the job stays queued and `speak` returns `outcome = "timeout"`.
+- Provider/voice fallback is silent to agents (unchanged MCP responses) but logged on the
+  `provider` target. A panicking job is isolated per-job, sets a `degraded` health flag (surfaced in
+  `isimud.status` and the tray tooltip) and broadcasts `SpeechEvent::Degraded`; the worker keeps
+  draining. The runtime supervises the worker handle and marks `degraded` if it exits unexpectedly
+  (no auto-restart).

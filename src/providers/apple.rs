@@ -2,21 +2,26 @@
 //!
 //! Synthesizes and plays speech via the macOS `say` CLI (cancellable, headless-safe, no run
 //! loop required) and enumerates installed voices natively through `objc2-avf-audio`
-//! `AVSpeechSynthesisVoice`. It plays its own audio, so it bypasses the rodio sink.
+//! `AVSpeechSynthesisVoice`. It plays its own audio, so it bypasses the rodio sink and cannot
+//! currently apply resolved volume or pitch.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use objc2_avf_audio::AVSpeechSynthesisVoice;
+use tracing::debug;
 
 use super::{CancelToken, ProviderError, SpeechOutput, TtsProvider, VoiceInfo};
 use crate::config::{AppleProviderConfig, ProviderKind};
 use crate::voices::ResolvedSpeech;
+use crate::TARGET_PROVIDER;
 
 /// Words-per-minute that corresponds to a neutral rate multiplier of `1.0`.
 const NEUTRAL_WPM: f32 = 175.0;
 /// Poll interval while waiting for the `say` child (also the cancellation latency).
 const POLL_INTERVAL: Duration = Duration::from_millis(40);
+static LOGGED_UNSUPPORTED_CONTROLS: AtomicBool = AtomicBool::new(false);
 
 /// Apple local TTS backend.
 pub struct AppleProvider {
@@ -54,6 +59,17 @@ impl TtsProvider for AppleProvider {
     ) -> Result<SpeechOutput, ProviderError> {
         if cancel.is_cancelled() {
             return Err(ProviderError::Cancelled);
+        }
+
+        if (speech.volume != 1.0 || speech.pitch.is_some())
+            && !LOGGED_UNSUPPORTED_CONTROLS.swap(true, Ordering::SeqCst)
+        {
+            debug!(
+                target: TARGET_PROVIDER,
+                volume = speech.volume,
+                pitch = ?speech.pitch,
+                "Apple say provider does not apply resolved volume or pitch"
+            );
         }
 
         let mut command = tokio::process::Command::new("say");

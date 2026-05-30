@@ -45,8 +45,8 @@ impl Tray {
         &self.quit_id
     }
 
-    /// Update the icon and tooltip for the given state and pulse phase.
-    pub fn update(&self, state: IndicatorState, pulse_on: bool) {
+    /// Update the icon and tooltip for the given state, pulse phase, and health.
+    pub fn update(&self, state: IndicatorState, pulse_on: bool, degraded: bool) {
         let icon = match state {
             IndicatorState::Idle => indicator_icon(IDLE_COLOR),
             IndicatorState::Speaking => {
@@ -58,9 +58,13 @@ impl Tray {
                 tracing::warn!(target: isimud::TARGET_RUNTIME, %error, "failed to set tray icon");
             }
         }
-        let tooltip = match state {
-            IndicatorState::Idle => "isimud — idle",
-            IndicatorState::Speaking => "isimud — speaking",
+        let tooltip = if degraded {
+            "isimud — degraded (see logs)"
+        } else {
+            match state {
+                IndicatorState::Idle => "isimud — idle",
+                IndicatorState::Speaking => "isimud — speaking",
+            }
         };
         let _ = self.icon.set_tooltip(Some(tooltip));
     }
