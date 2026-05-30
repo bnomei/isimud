@@ -8,6 +8,7 @@ mod config_watch;
 mod logging;
 mod runtime_shell;
 mod runtime_tray;
+mod url_scheme;
 
 use std::path::Path;
 use std::process::ExitCode;

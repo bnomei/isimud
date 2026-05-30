@@ -24,5 +24,18 @@
   <true/>
   <key>NSHighResolutionCapable</key>
   <true/>
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key>
+      <string>@BUNDLE_IDENTIFIER@.url</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>CFBundleURLSchemes</key>
+      <array>
+        <string>isimud</string>
+      </array>
+    </dict>
+  </array>
 </dict>
 </plist>

@@ -20,11 +20,14 @@ use tao::event::{Event, StartCause};
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
 #[cfg(target_os = "macos")]
 use tao::platform::macos::{ActivationPolicy, EventLoopExtMacOS};
-use tray_icon::menu::MenuEvent;
 
 use crate::config_watch::{spawn_config_watcher, ConfigReloadResult};
-use crate::runtime_tray::{build_tray, send_user_event, IndicatorState, TrayColors, UserEvent};
+use crate::runtime_tray::{
+    build_tray, install_tray_event_bridge, map_tray_event, send_user_event, IndicatorState,
+    TrayColors, UserEvent,
+};
 use isimud::state::SpeechEvent;
+use isimud::voices::SpeakRequest;
 
 /// Interval driving the speaking pulse animation.
 const PULSE_INTERVAL: Duration = Duration::from_millis(350);
@@ -131,6 +134,16 @@ fn run_tray(
     let proxy = event_loop.create_proxy();
     let handle = runtime.handle().clone();
 
+    // Bridge tray-icon clicks into the event loop (a left click speaks a fortune).
+    install_tray_event_bridge(proxy.clone());
+
+    // Register the isimud:// URL scheme handler before the event loop runs. macOS delivers the
+    // launch GetURL Apple Event during applicationWillFinishLaunching, earlier than
+    // StartCause::Init, so the observer installed here must already be in place to catch URLs
+    // that cold-launch the app.
+    #[cfg(target_os = "macos")]
+    crate::url_scheme::install_url_scheme_handler(proxy.clone());
+
     // Bridge config-file changes into the event loop so the tray is repainted on the main thread.
     let watch_proxy = proxy.clone();
     spawn_config_watcher(config_path, move |result| {
@@ -160,13 +173,6 @@ fn run_tray(
             Event::NewEvents(StartCause::Init) => {
                 match build_tray(colors) {
                     Ok(built) => {
-                        let quit_id = built.quit_id().clone();
-                        let menu_proxy = proxy.clone();
-                        MenuEvent::set_event_handler(Some(move |menu_event: MenuEvent| {
-                            if menu_event.id == quit_id {
-                                let _ = menu_proxy.send_event(UserEvent::Quit);
-                            }
-                        }));
                         built.update(IndicatorState::Idle, true, degraded);
                         tray = Some(built);
                     }
@@ -247,10 +253,34 @@ fn run_tray(
                     tray.update(indicator, pulse_on, degraded);
                 }
             }
-            Event::UserEvent(UserEvent::Quit) => {
-                info!(target: TARGET_RUNTIME, "quit requested from tray");
-                let _ = shutdown_tx.send(());
-                *control_flow = ControlFlow::Exit;
+            Event::UserEvent(UserEvent::Speak(request)) => match engine.enqueue(request) {
+                Ok(job_id) => {
+                    info!(target: TARGET_RUNTIME, %job_id, "enqueued speech from isimud:// URL")
+                }
+                Err(error) => {
+                    warn!(target: TARGET_RUNTIME, ?error, "failed to enqueue speech from isimud:// URL")
+                }
+            },
+            Event::UserEvent(UserEvent::TrayEvent(event)) if map_tray_event(&event) => {
+                let fortune_engine = engine.clone();
+                handle.spawn(async move {
+                    match run_fortune().await {
+                        Ok(text) => {
+                            let request = SpeakRequest { text, voice: None, rate: None };
+                            match fortune_engine.enqueue(request) {
+                                Ok(job_id) => {
+                                    info!(target: TARGET_RUNTIME, %job_id, "enqueued fortune from tray click")
+                                }
+                                Err(error) => {
+                                    warn!(target: TARGET_RUNTIME, ?error, "failed to enqueue fortune from tray click")
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            warn!(target: TARGET_RUNTIME, %error, "fortune unavailable; tray click ignored")
+                        }
+                    }
+                });
             }
             Event::UserEvent(UserEvent::ServerStopped(message)) => {
                 match &message {
@@ -283,4 +313,21 @@ fn run_tray(
         let _ = &engine;
         let _ = &supervisor;
     })
+}
+
+/// Run the `fortune` binary and return its trimmed output. Errors if `fortune` is not installed
+/// or produces no output, so a tray click is silently ignored when fortune is unavailable.
+async fn run_fortune() -> Result<String> {
+    let output = tokio::process::Command::new("fortune")
+        .output()
+        .await
+        .context("spawning fortune (is it installed?)")?;
+    if !output.status.success() {
+        anyhow::bail!("fortune exited with status {}", output.status);
+    }
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if text.is_empty() {
+        anyhow::bail!("fortune produced no output");
+    }
+    Ok(text)
 }

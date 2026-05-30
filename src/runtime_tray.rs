@@ -6,9 +6,9 @@
 use anyhow::{Context, Result};
 use isimud::config::{AppConfig, IndicatorColorsConfig};
 use isimud::state::SpeechEvent;
+use isimud::voices::SpeakRequest;
 use tao::event_loop::EventLoopProxy;
-use tray_icon::menu::{Menu, MenuId, MenuItem};
-use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
+use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 /// Side length of the rendered menu-bar icon, in pixels.
 const ICON_SIZE: u32 = 36;
@@ -18,10 +18,12 @@ const ICON_SIZE: u32 = 36;
 pub enum UserEvent {
     /// A speech lifecycle event from the engine.
     Speech(SpeechEvent),
+    /// A speech request parsed from an `isimud://speak` URL, to be enqueued.
+    Speak(SpeakRequest),
     /// Periodic tick driving the pulse animation while speaking.
     Tick,
-    /// The user chose "Quit" from the tray menu.
-    Quit,
+    /// A raw tray-icon mouse event (e.g. a left click to speak a fortune).
+    TrayEvent(TrayIconEvent),
     /// The MCP server task ended (carrying an optional error message).
     ServerStopped(Option<String>),
     /// The config file changed and parsed/validated successfully; carries the new config.
@@ -40,18 +42,10 @@ pub enum IndicatorState {
 /// Live tray handle plus the menu items it owns (kept alive for the tray's lifetime).
 pub struct Tray {
     icon: TrayIcon,
-    quit_id: MenuId,
     colors: TrayColors,
-    _menu: Menu,
-    _quit_item: MenuItem,
 }
 
 impl Tray {
-    /// The menu id of the "Quit" item, used to match incoming menu events.
-    pub fn quit_id(&self) -> &MenuId {
-        &self.quit_id
-    }
-
     /// Replace the active color palette (used when the config is hot-reloaded).
     pub fn set_colors(&mut self, colors: TrayColors) {
         self.colors = colors;
@@ -161,22 +155,33 @@ pub fn send_user_event(
     }
 }
 
-/// Build the tray icon with a "Quit" menu, starting in the idle appearance.
-pub fn build_tray(colors: TrayColors) -> Result<Tray> {
-    let menu = Menu::new();
-    let quit_item = MenuItem::new("Quit isimud", true, None);
-    menu.append(&quit_item).context("appending tray Quit item")?;
-    let quit_id = quit_item.id().clone();
+/// Forward tray-icon mouse events into the `tao` event loop as [`UserEvent::TrayEvent`].
+pub fn install_tray_event_bridge(proxy: EventLoopProxy<UserEvent>) {
+    TrayIconEvent::set_event_handler(Some(move |event| {
+        send_user_event(&proxy, UserEvent::TrayEvent(event), "tray_event_bridge");
+    }));
+}
 
+/// Whether a tray event is a completed left click. Acting on the button release (a full click)
+/// keeps a single click from firing the action twice.
+pub fn map_tray_event(event: &TrayIconEvent) -> bool {
+    matches!(
+        event,
+        TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. }
+    )
+}
+
+/// Build the tray icon (no menu), starting in the idle appearance. A left click is delivered as
+/// a [`UserEvent::TrayEvent`] via [`install_tray_event_bridge`].
+pub fn build_tray(colors: TrayColors) -> Result<Tray> {
     let icon = indicator_icon(colors.idle).context("building initial tray icon")?;
     let tray = TrayIconBuilder::new()
         .with_icon(icon)
         .with_tooltip("isimud — idle")
-        .with_menu(Box::new(menu.clone()))
         .build()
         .context("creating menu bar tray icon")?;
 
-    Ok(Tray { icon: tray, quit_id, colors, _menu: menu, _quit_item: quit_item })
+    Ok(Tray { icon: tray, colors })
 }
 
 /// Render a filled-circle indicator of the given color into an RGBA icon.
