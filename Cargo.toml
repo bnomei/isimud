@@ -48,7 +48,7 @@ block2 = "0.6.2"
 objc2 = "0.6.4"
 objc2-avf-audio = { version = "0.3.2", features = ["AVSpeechSynthesis", "block2"] }
 objc2-foundation = { version = "0.3.2", features = ["NSArray", "NSString"] }
-tao = "0.34"
+tao = "0.35"
 tracing-oslog = "0.3.0"
 tray-icon = "0.21"
 
