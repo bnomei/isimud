@@ -51,7 +51,7 @@ pub async fn run_server(
     engine: SpeechEngine,
     shutdown_tx: broadcast::Sender<()>,
 ) -> Result<(), ServerError> {
-    let config = engine.config().clone();
+    let config = engine.config();
     let addr = resolve_bind_addr(&config)?;
     let auth_token = config.resolved_auth_token();
 

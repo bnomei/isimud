@@ -3,6 +3,7 @@
 //! Builds the tokio runtime, starts the speech worker and MCP/HTTP server, and runs the `tao`
 //! event loop for the tray. Supports `--headless` / `[app].menubar = false` (no tray).
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -13,7 +14,7 @@ use isimud::worker::SpeechEngine;
 use isimud::TARGET_RUNTIME;
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use tao::event::{Event, StartCause};
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
@@ -21,7 +22,8 @@ use tao::event_loop::{ControlFlow, EventLoopBuilder};
 use tao::platform::macos::{ActivationPolicy, EventLoopExtMacOS};
 use tray_icon::menu::MenuEvent;
 
-use crate::runtime_tray::{build_tray, IndicatorState, UserEvent};
+use crate::config_watch::{spawn_config_watcher, ConfigReloadResult};
+use crate::runtime_tray::{build_tray, send_user_event, IndicatorState, TrayColors, UserEvent};
 use isimud::state::SpeechEvent;
 
 /// Interval driving the speaking pulse animation.
@@ -29,7 +31,7 @@ const PULSE_INTERVAL: Duration = Duration::from_millis(350);
 
 /// Build the runtime, start the worker + MCP server, and run either the tray event loop or a
 /// headless wait-for-signal loop.
-pub fn run(config: AppConfig, headless: bool) -> Result<()> {
+pub fn run(config: AppConfig, config_path: PathBuf, headless: bool) -> Result<()> {
     let config = Arc::new(config);
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -65,19 +67,38 @@ pub fn run(config: AppConfig, headless: bool) -> Result<()> {
 
     let menubar = config.app.menubar && !headless;
     if !menubar {
-        return run_headless(&runtime, server_handle, supervisor, &shutdown_tx);
+        return run_headless(
+            &runtime,
+            engine,
+            config_path,
+            server_handle,
+            supervisor,
+            &shutdown_tx,
+        );
     }
-    run_tray(runtime, engine, shutdown_tx, server_handle, supervisor)
+    run_tray(runtime, engine, config_path, shutdown_tx, server_handle, supervisor)
 }
 
-/// Headless mode: serve until Ctrl-C, then shut the server down gracefully.
+/// Headless mode: serve until Ctrl-C, then shut the server down gracefully. The config watcher
+/// reloads the engine in place (no tray to repaint).
 fn run_headless(
     runtime: &tokio::runtime::Runtime,
+    engine: SpeechEngine,
+    config_path: PathBuf,
     server_handle: JoinHandle<Result<(), ServerError>>,
     supervisor: JoinHandle<()>,
     shutdown_tx: &broadcast::Sender<()>,
 ) -> Result<()> {
     info!(target: TARGET_RUNTIME, "running headless (menu bar disabled)");
+    spawn_config_watcher(config_path, move |result| match result {
+        ConfigReloadResult::Loaded(config) => {
+            engine.reload_config(Arc::new(*config));
+            info!(target: TARGET_RUNTIME, "configuration reloaded");
+        }
+        ConfigReloadResult::Failed(reason) => {
+            warn!(target: TARGET_RUNTIME, %reason, "config reload failed; keeping previous configuration");
+        }
+    });
     runtime.block_on(async move {
         if let Err(error) = tokio::signal::ctrl_c().await {
             error!(target: TARGET_RUNTIME, %error, "failed to listen for Ctrl-C");
@@ -98,6 +119,7 @@ fn run_headless(
 fn run_tray(
     runtime: tokio::runtime::Runtime,
     engine: SpeechEngine,
+    config_path: PathBuf,
     shutdown_tx: broadcast::Sender<()>,
     server_handle: JoinHandle<Result<(), ServerError>>,
     supervisor: JoinHandle<()>,
@@ -109,6 +131,21 @@ fn run_tray(
     let proxy = event_loop.create_proxy();
     let handle = runtime.handle().clone();
 
+    // Bridge config-file changes into the event loop so the tray is repainted on the main thread.
+    let watch_proxy = proxy.clone();
+    spawn_config_watcher(config_path, move |result| {
+        let (event, context) = match result {
+            ConfigReloadResult::Loaded(config) => {
+                (UserEvent::ConfigReloaded(config), "config_reload_success")
+            }
+            ConfigReloadResult::Failed(reason) => {
+                (UserEvent::ConfigReloadFailed(reason), "config_reload_failed")
+            }
+        };
+        send_user_event(&watch_proxy, event, context);
+    });
+
+    let mut colors = TrayColors::from_config(&engine.config().indicator.colors);
     let mut tray: Option<crate::runtime_tray::Tray> = None;
     let mut indicator = IndicatorState::Idle;
     let mut pulse_on = true;
@@ -121,7 +158,7 @@ fn run_tray(
         *control_flow = ControlFlow::Wait;
         match event {
             Event::NewEvents(StartCause::Init) => {
-                match build_tray() {
+                match build_tray(colors) {
                     Ok(built) => {
                         let quit_id = built.quit_id().clone();
                         let menu_proxy = proxy.clone();
@@ -224,6 +261,19 @@ fn run_tray(
                 }
                 let _ = shutdown_tx.send(());
                 *control_flow = ControlFlow::Exit;
+            }
+            Event::UserEvent(UserEvent::ConfigReloaded(new_config)) => {
+                let new_config = Arc::new(*new_config);
+                engine.reload_config(new_config.clone());
+                colors = TrayColors::from_config(&new_config.indicator.colors);
+                if let Some(tray) = tray.as_mut() {
+                    tray.set_colors(colors);
+                    tray.update(indicator, pulse_on, degraded);
+                }
+                info!(target: TARGET_RUNTIME, "configuration reloaded");
+            }
+            Event::UserEvent(UserEvent::ConfigReloadFailed(reason)) => {
+                warn!(target: TARGET_RUNTIME, %reason, "config reload failed; keeping previous configuration");
             }
             _ => {}
         }

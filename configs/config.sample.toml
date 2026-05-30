@@ -62,3 +62,10 @@ audio_encoding = "LINEAR16"
 [logging]
 # Base level when RUST_LOG is unset. Targets: runtime, server, provider, config, speech.
 level = "info"
+
+# Menu bar tray icon colors as #RRGGBB hex strings. Defaults match muninn's Apple system palette:
+# systemGray idle, systemGreen pulse (dimmed ~66% for the off phase). Edits hot-reload live.
+[indicator.colors]
+idle = "#636366"
+speaking_bright = "#30D158"
+speaking_dim = "#208A3A"

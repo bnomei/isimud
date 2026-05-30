@@ -4,6 +4,7 @@
 //! the runtime shell (menu bar + MCP server, or headless MCP server).
 
 mod autostart;
+mod config_watch;
 mod logging;
 mod runtime_shell;
 mod runtime_tray;
@@ -53,7 +54,7 @@ fn bootstrap(headless: bool) -> Result<()> {
         "loaded application configuration"
     );
 
-    runtime_shell::run(config, headless)
+    runtime_shell::run(config, config_path, headless)
 }
 
 fn sync_os_autostart(config_path: &Path, config: &AppConfig) {

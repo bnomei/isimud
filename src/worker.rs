@@ -7,6 +7,7 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use arc_swap::ArcSwap;
 use tokio::sync::{broadcast, oneshot, Notify};
 use tracing::{error, info, warn};
 use uuid::Uuid;
@@ -41,8 +42,8 @@ struct CurrentJob {
 }
 
 struct EngineInner {
-    config: Arc<AppConfig>,
-    registry: ProviderRegistry,
+    config: ArcSwap<AppConfig>,
+    registry: ArcSwap<ProviderRegistry>,
     queue: Mutex<VecDeque<Job>>,
     notify: Notify,
     current: Mutex<Option<CurrentJob>>,
@@ -93,8 +94,8 @@ impl SpeechEngine {
         let (events, _) = broadcast::channel(EVENT_CHANNEL_CAPACITY);
         Self {
             inner: Arc::new(EngineInner {
-                config,
-                registry,
+                config: ArcSwap::new(config),
+                registry: ArcSwap::new(Arc::new(registry)),
                 queue: Mutex::new(VecDeque::new()),
                 notify: Notify::new(),
                 current: Mutex::new(None),
@@ -112,9 +113,17 @@ impl SpeechEngine {
         tokio::spawn(async move { worker_loop(inner).await })
     }
 
-    /// The active application configuration.
-    pub fn config(&self) -> &Arc<AppConfig> {
-        &self.inner.config
+    /// The active application configuration (a snapshot taken at call time).
+    pub fn config(&self) -> Arc<AppConfig> {
+        self.inner.config.load_full()
+    }
+
+    /// Atomically swap in a new configuration, rebuilding the provider registry so that
+    /// changed voices, rates, and provider credentials take effect on the next job.
+    pub fn reload_config(&self, new_config: Arc<AppConfig>) {
+        let registry = ProviderRegistry::from_config(&new_config);
+        self.inner.registry.store(Arc::new(registry));
+        self.inner.config.store(new_config);
     }
 
     /// Subscribe to the speech-event stream.
@@ -139,7 +148,7 @@ impl SpeechEngine {
 
     /// Configured wait timeout, in seconds; 0 means wait forever.
     pub fn wait_timeout_secs(&self) -> u64 {
-        self.inner.config.tts.wait_timeout_secs
+        self.inner.config.load().tts.wait_timeout_secs
     }
 
     /// Mark the engine as degraded and broadcast a health event.
@@ -172,13 +181,14 @@ impl SpeechEngine {
         request: SpeakRequest,
         waiter: Option<JobWaiter>,
     ) -> Result<Uuid, EnqueueError> {
-        let resolved = resolve_speech(&self.inner.config, &request)?;
+        let config = self.inner.config.load();
+        let resolved = resolve_speech(&config, &request)?;
         let id = Uuid::new_v4();
         let preview = preview_text(&resolved.text);
 
         let depth = {
             let mut queue = lock_or_recover(&self.inner.queue, "queue");
-            let capacity = self.inner.config.tts.max_queue_depth;
+            let capacity = config.tts.max_queue_depth;
             // A capacity of 0 intentionally disables backpressure for users who prefer unbounded
             // fire-and-forget queuing.
             if capacity > 0 && queue.len() >= capacity {
@@ -218,9 +228,8 @@ impl SpeechEngine {
 
     /// Enumerate configured named voices plus best-effort per-provider voices.
     pub async fn list_voices(&self) -> VoiceCatalog {
-        let named = self
-            .inner
-            .config
+        let config = self.inner.config.load_full();
+        let named = config
             .voices
             .iter()
             .map(|(name, voice)| NamedVoiceEntry {
@@ -229,7 +238,8 @@ impl SpeechEngine {
                 voice: voice.voice.clone(),
             })
             .collect();
-        let providers = self.inner.registry.list_all_voices().await;
+        let registry = self.inner.registry.load_full();
+        let providers = registry.list_all_voices().await;
         VoiceCatalog { named, providers }
     }
 }
@@ -347,7 +357,9 @@ async fn process_job(inner: Arc<EngineInner>, job: Job) {
     }
     let remaining = lock_or_recover(&inner.queue, "queue").len();
 
-    let selection = inner.registry.select(&resolved, &inner.config.tts.providers).await;
+    let registry = inner.registry.load_full();
+    let config = inner.config.load_full();
+    let selection = registry.select(&resolved, &config.tts.providers).await;
 
     let outcome = match selection {
         Some((provider, eff)) => {

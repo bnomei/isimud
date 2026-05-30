@@ -40,6 +40,7 @@ pub struct AppConfig {
     pub voices: BTreeMap<String, VoiceConfig>,
     pub providers: ProvidersConfig,
     pub logging: LoggingConfig,
+    pub indicator: IndicatorConfig,
 }
 
 /// `[app]` — runtime / menu-bar behavior.
@@ -254,6 +255,53 @@ impl Default for LoggingConfig {
     }
 }
 
+/// `[indicator]` — menu-bar tray appearance.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct IndicatorConfig {
+    pub colors: IndicatorColorsConfig,
+}
+
+/// `[indicator.colors]` — tray icon colors as `#RRGGBB` hex strings. `idle` is the persistent
+/// resting color; `speaking_bright`/`speaking_dim` are the two phases of the speaking pulse.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct IndicatorColorsConfig {
+    pub idle: String,
+    pub speaking_bright: String,
+    pub speaking_dim: String,
+}
+
+impl Default for IndicatorColorsConfig {
+    fn default() -> Self {
+        // Apple system colors, matching MUNINN: systemGray idle, systemGreen pulse (dimmed ~66%).
+        Self {
+            idle: "#636366".to_string(),
+            speaking_bright: "#30D158".to_string(),
+            speaking_dim: "#208A3A".to_string(),
+        }
+    }
+}
+
+impl IndicatorColorsConfig {
+    /// Reject any color that is not a `#RRGGBB` hex string.
+    pub fn validate(&self) -> Result<(), ConfigValidationError> {
+        for (color_name, color_value) in [
+            ("indicator.colors.idle", self.idle.as_str()),
+            ("indicator.colors.speaking_bright", self.speaking_bright.as_str()),
+            ("indicator.colors.speaking_dim", self.speaking_dim.as_str()),
+        ] {
+            if !is_valid_hex_color(color_value) {
+                return Err(ConfigValidationError::IndicatorColorMustBeHex {
+                    color_name: color_name.to_string(),
+                    color_value: color_value.to_string(),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
 impl AppConfig {
     /// Load configuration from the resolved path, creating a default file if absent.
     pub fn load() -> Result<Self, ConfigError> {
@@ -271,13 +319,24 @@ impl AppConfig {
         let raw = fs::read_to_string(path)
             .map_err(|source| ConfigError::Read { path: path.to_path_buf(), source })?;
 
-        toml::from_str(&raw)
-            .map_err(|source| ConfigError::ParseTomlAtPath { path: path.to_path_buf(), source })
+        let config: Self = toml::from_str(&raw)
+            .map_err(|source| ConfigError::ParseTomlAtPath { path: path.to_path_buf(), source })?;
+        config.validate()?;
+        Ok(config)
     }
 
-    /// Parse configuration from a TOML string (used in tests).
+    /// Parse configuration from a TOML string (used in tests and the config watcher).
     pub fn from_toml_str(raw: &str) -> Result<Self, ConfigError> {
-        toml::from_str(raw).map_err(|source| ConfigError::ParseToml { source })
+        let config: Self =
+            toml::from_str(raw).map_err(|source| ConfigError::ParseToml { source })?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    /// Validate cross-field and format constraints not expressible via serde alone.
+    pub fn validate(&self) -> Result<(), ConfigValidationError> {
+        self.indicator.colors.validate()?;
+        Ok(())
     }
 
     /// The configuration written when no file exists yet.
@@ -331,6 +390,14 @@ impl AppConfig {
 
 fn non_empty_env(key: &str) -> Option<String> {
     env::var(key).ok().map(|value| value.trim().to_string()).filter(|value| !value.is_empty())
+}
+
+/// True when `value` is a `#RRGGBB` hex color (case-insensitive).
+fn is_valid_hex_color(value: &str) -> bool {
+    let Some(hex) = value.strip_prefix('#') else {
+        return false;
+    };
+    hex.len() == 6 && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 /// Resolve the active config path using the documented precedence.
@@ -422,11 +489,22 @@ pub enum ConfigError {
         #[source]
         source: std::io::Error,
     },
+    #[error(transparent)]
+    Validation(#[from] ConfigValidationError),
+}
+
+/// Errors raised when a syntactically valid config violates a semantic constraint.
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
+pub enum ConfigValidationError {
+    #[error("indicator color must be a #RRGGBB hex string ({color_name}={color_value})")]
+    IndicatorColorMustBeHex { color_name: String, color_value: String },
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_config_path_with, AppConfig, ConfigError, ProviderKind};
+    use super::{
+        resolve_config_path_with, AppConfig, ConfigError, ConfigValidationError, ProviderKind,
+    };
     use std::ffi::OsString;
     use std::path::PathBuf;
 
@@ -479,6 +557,26 @@ mod tests {
         let from_home = resolve_config_path_with(|_| None, Some(PathBuf::from("/Users/alice")))
             .expect("home should resolve");
         assert_eq!(from_home, PathBuf::from("/Users/alice/.config/isimud/config.toml"));
+    }
+
+    #[test]
+    fn parses_indicator_colors() {
+        let config = AppConfig::from_toml_str(
+            "[indicator.colors]\nidle = \"#112233\"\nspeaking_bright = \"#445566\"\nspeaking_dim = \"#778899\"\n",
+        )
+        .expect("indicator colors should parse");
+        assert_eq!(config.indicator.colors.idle, "#112233");
+        assert_eq!(config.indicator.colors.speaking_bright, "#445566");
+    }
+
+    #[test]
+    fn rejects_invalid_indicator_color() {
+        let error = AppConfig::from_toml_str("[indicator.colors]\nidle = \"not-a-color\"\n")
+            .expect_err("invalid hex must fail validation");
+        assert!(matches!(
+            error,
+            ConfigError::Validation(ConfigValidationError::IndicatorColorMustBeHex { .. })
+        ));
     }
 
     #[test]

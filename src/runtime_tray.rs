@@ -4,7 +4,9 @@
 //! mirroring MUNINN's indicator renderer.
 
 use anyhow::{Context, Result};
+use isimud::config::{AppConfig, IndicatorColorsConfig};
 use isimud::state::SpeechEvent;
+use tao::event_loop::EventLoopProxy;
 use tray_icon::menu::{Menu, MenuId, MenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
@@ -22,6 +24,10 @@ pub enum UserEvent {
     Quit,
     /// The MCP server task ended (carrying an optional error message).
     ServerStopped(Option<String>),
+    /// The config file changed and parsed/validated successfully; carries the new config.
+    ConfigReloaded(Box<AppConfig>),
+    /// The config file changed but could not be parsed or validated (carries the reason).
+    ConfigReloadFailed(String),
 }
 
 /// Whether the indicator should render the idle or the active (speaking) appearance.
@@ -35,6 +41,7 @@ pub enum IndicatorState {
 pub struct Tray {
     icon: TrayIcon,
     quit_id: MenuId,
+    colors: TrayColors,
     _menu: Menu,
     _quit_item: MenuItem,
 }
@@ -45,13 +52,20 @@ impl Tray {
         &self.quit_id
     }
 
+    /// Replace the active color palette (used when the config is hot-reloaded).
+    pub fn set_colors(&mut self, colors: TrayColors) {
+        self.colors = colors;
+    }
+
     /// Update the icon and tooltip for the given state, pulse phase, and health.
     pub fn update(&self, state: IndicatorState, pulse_on: bool, degraded: bool) {
         let icon = match state {
-            IndicatorState::Idle => indicator_icon(IDLE_COLOR),
-            IndicatorState::Speaking => {
-                indicator_icon(if pulse_on { SPEAKING_BRIGHT } else { SPEAKING_DIM })
-            }
+            IndicatorState::Idle => indicator_icon(self.colors.idle),
+            IndicatorState::Speaking => indicator_icon(if pulse_on {
+                self.colors.speaking_bright
+            } else {
+                self.colors.speaking_dim
+            }),
         };
         if let Ok(icon) = icon {
             if let Err(error) = self.icon.set_icon(Some(icon)) {
@@ -70,18 +84,91 @@ impl Tray {
     }
 }
 
-const IDLE_COLOR: (u8, u8, u8) = (96, 104, 120);
-const SPEAKING_BRIGHT: (u8, u8, u8) = (72, 199, 116);
-const SPEAKING_DIM: (u8, u8, u8) = (48, 132, 78);
+/// The tray icon palette, resolved from `[indicator.colors]` (or built-in defaults).
+#[derive(Debug, Clone, Copy)]
+pub struct TrayColors {
+    idle: (u8, u8, u8),
+    speaking_bright: (u8, u8, u8),
+    speaking_dim: (u8, u8, u8),
+}
+
+impl Default for TrayColors {
+    fn default() -> Self {
+        // Aligned with MUNINN's Apple system-color palette: idle systemGray (#636366) and the
+        // active pulse derived from systemGreen (#30D158), dimmed to ~66% for the off phase.
+        Self { idle: (99, 99, 102), speaking_bright: (48, 209, 88), speaking_dim: (32, 138, 58) }
+    }
+}
+
+impl TrayColors {
+    /// Resolve colors from config, falling back to the default for any field that fails to parse.
+    /// Config validation already rejects bad hex on load, so this fallback is purely defensive.
+    pub fn from_config(colors: &IndicatorColorsConfig) -> Self {
+        let default = Self::default();
+        Self {
+            idle: resolve_color("indicator.colors.idle", &colors.idle, default.idle),
+            speaking_bright: resolve_color(
+                "indicator.colors.speaking_bright",
+                &colors.speaking_bright,
+                default.speaking_bright,
+            ),
+            speaking_dim: resolve_color(
+                "indicator.colors.speaking_dim",
+                &colors.speaking_dim,
+                default.speaking_dim,
+            ),
+        }
+    }
+}
+
+fn resolve_color(name: &str, value: &str, fallback: (u8, u8, u8)) -> (u8, u8, u8) {
+    match parse_hex_rgb(value) {
+        Ok(rgb) => rgb,
+        Err(error) => {
+            tracing::warn!(target: isimud::TARGET_RUNTIME, color = name, %error, "invalid tray color; using default");
+            fallback
+        }
+    }
+}
+
+/// Parse a `#RRGGBB` hex string into an `(r, g, b)` triple.
+fn parse_hex_rgb(value: &str) -> Result<(u8, u8, u8)> {
+    let Some(hex) = value.strip_prefix('#') else {
+        anyhow::bail!("indicator color must start with '#': {value}");
+    };
+    if hex.len() != 6 {
+        anyhow::bail!("indicator color must be exactly 6 hex digits: {value}");
+    }
+    let parse = |start: usize| {
+        u8::from_str_radix(&hex[start..start + 2], 16)
+            .with_context(|| format!("indicator color contains invalid hex digits: {value}"))
+    };
+    Ok((parse(0)?, parse(2)?, parse(4)?))
+}
+
+/// Send a [`UserEvent`] into the event loop, warning if the loop has already exited.
+pub fn send_user_event(
+    proxy: &EventLoopProxy<UserEvent>,
+    event: UserEvent,
+    context: &'static str,
+) -> bool {
+    match proxy.send_event(event) {
+        Ok(()) => true,
+        Err(error) => {
+            tracing::warn!(target: isimud::TARGET_RUNTIME, context, %error, "failed to send user event");
+            false
+        }
+    }
+}
 
 /// Build the tray icon with a "Quit" menu, starting in the idle appearance.
-pub fn build_tray() -> Result<Tray> {
+pub fn build_tray(colors: TrayColors) -> Result<Tray> {
     let menu = Menu::new();
     let quit_item = MenuItem::new("Quit isimud", true, None);
     menu.append(&quit_item).context("appending tray Quit item")?;
     let quit_id = quit_item.id().clone();
 
-    let icon = indicator_icon(IDLE_COLOR).context("building initial tray icon")?;
+    let icon = indicator_icon(colors.idle).context("building initial tray icon")?;
     let tray = TrayIconBuilder::new()
         .with_icon(icon)
         .with_tooltip("isimud — idle")
@@ -89,7 +176,7 @@ pub fn build_tray() -> Result<Tray> {
         .build()
         .context("creating menu bar tray icon")?;
 
-    Ok(Tray { icon: tray, quit_id, _menu: menu, _quit_item: quit_item })
+    Ok(Tray { icon: tray, quit_id, colors, _menu: menu, _quit_item: quit_item })
 }
 
 /// Render a filled-circle indicator of the given color into an RGBA icon.
@@ -121,4 +208,34 @@ fn indicator_icon(rgb: (u8, u8, u8)) -> Result<Icon> {
     }
 
     Icon::from_rgba(data, ICON_SIZE, ICON_SIZE).context("constructing RGBA icon")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_hex_rgb_accepts_valid_colors() {
+        assert_eq!(parse_hex_rgb("#112233").unwrap(), (17, 34, 51));
+        assert_eq!(parse_hex_rgb("#30D158").unwrap(), (48, 209, 88));
+    }
+
+    #[test]
+    fn parse_hex_rgb_rejects_invalid_colors() {
+        assert!(parse_hex_rgb("112233").is_err());
+        assert!(parse_hex_rgb("#11223").is_err());
+        assert!(parse_hex_rgb("#11zz33").is_err());
+    }
+
+    #[test]
+    fn from_config_falls_back_on_bad_hex() {
+        let colors = IndicatorColorsConfig {
+            idle: "bad".to_string(),
+            speaking_bright: "#30D158".to_string(),
+            speaking_dim: "#208A3A".to_string(),
+        };
+        let resolved = TrayColors::from_config(&colors);
+        assert_eq!(resolved.idle, TrayColors::default().idle);
+        assert_eq!(resolved.speaking_bright, (48, 209, 88));
+    }
 }

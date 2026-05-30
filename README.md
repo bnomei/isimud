@@ -139,9 +139,21 @@ host = "127.0.0.1"
 port = 3654
 path = "/mcp"
 allow_remote = false                        # non-loopback bind requires an auth token
+
+[indicator.colors]
+idle = "#636366"                            # systemGray (matches muninn)
+speaking_bright = "#30D158"                 # systemGreen pulse, bright phase
+speaking_dim = "#208A3A"                    # ~66% systemGreen, off phase
 ```
 
 The bind address is loopback-only unless `[server].allow_remote = true` **and** an auth token is set.
+
+### Live config reload
+
+isimud watches the config file and applies changes without a restart. Saving the file hot-swaps
+the running configuration via an `ArcSwap`, so tray icon colors (`[indicator.colors]`, validated as
+`#RRGGBB` hex), named voices, rates, and provider credentials all take effect on the next utterance.
+Invalid edits are rejected with a logged warning and the previous config is kept.
 
 ## Backpressure & Observability
 
