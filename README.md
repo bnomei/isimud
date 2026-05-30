@@ -64,12 +64,34 @@ voice = "en-US-Neural2-C"
 language = "en-US"
 ```
 
+> **`default_voice` is a voice name, not a provider name.** `[tts].default_voice` (and the `voice` argument to `isimud.speak`) must match one of the `[voices.<name>]` keys above — e.g. `default`, `narrator`, or `googler`. Setting `default_voice = "openai"` fails with `unknown voice 'openai'` unless a `[voices.openai]` block exists. To make OpenAI the default for a plain `speak(text)`, point `default_voice` at a voice whose `provider = "openai"` (such as `narrator`), or add your own `[voices.<name>]` block mapped to that provider.
+
 Providers and their routing:
 - **Apple** — local, no API key. Synthesizes through the macOS `say` CLI (cancellable, headless-safe) and enumerates installed voices natively via `AVSpeechSynthesisVoice`. It plays its own audio, so it honors `rate` but **cannot apply volume or pitch** (logged once when requested).
 - **OpenAI** — `POST /v1/audio/speech`; set `OPENAI_API_KEY`.
 - **Google** — Google Cloud TTS `text:synthesize`; set `GOOGLE_API_KEY`.
 
 `[tts].providers` is the availability / fallback order. When a named voice's provider is unavailable (for example a missing key), isimud falls back to the next available provider with a loud log line rather than failing silently.
+
+### OpenAI voices
+
+Set the `voice` of a `provider = "openai"` block to one of the following ids. Styles are approximate character descriptions:
+
+| Voice | Style |
+| --- | --- |
+| `alloy` | neutral, balanced |
+| `ash` | clear, articulate |
+| `ballad` | smooth, melodic |
+| `cedar` | warm, grounded |
+| `coral` | vibrant, warm |
+| `echo` | precise, resonant |
+| `fable` | expressive, storyteller |
+| `marin` | natural, conversational |
+| `nova` | energetic, bright |
+| `onyx` | deep, authoritative |
+| `sage` | calm, measured |
+| `shimmer` | cheerful, light |
+| `verse` | poetic, expressive |
 
 ## BYOK & Provider Setup
 
@@ -129,7 +151,7 @@ See [`configs/config.sample.toml`](configs/config.sample.toml) for the full sche
 ```toml
 [tts]
 providers = ["apple", "openai", "google"] # availability / fallback order
-default_voice = "default"                  # voice for speak(text) with no explicit voice
+default_voice = "default"                  # a [voices.<name>] key below, NOT a provider name
 rate = 1.0                                  # neutral multiplier (1.0 = normal)
 max_queue_depth = 64                        # jobs allowed behind the active one; 0 = unbounded
 wait_timeout_secs = 0                       # seconds wait=true blocks; 0 = wait forever

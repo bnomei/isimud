@@ -21,6 +21,9 @@ allow_remote = false
 # Availability / fallback order when a named voice's provider is unavailable.
 providers = ["apple", "openai", "google"]
 # Named voice used for a plain speak(text) call with no explicit voice.
+# IMPORTANT: this must match one of the [voices.<name>] keys below (e.g. "default",
+# "narrator", "googler") -- it is NOT a provider name. To make OpenAI the default,
+# set this to "narrator" (or any voice whose provider = "openai"), not "openai".
 default_voice = "default"
 # Global default speaking rate as a neutral multiplier (1.0 = normal).
 rate = 1.0
@@ -30,10 +33,13 @@ max_queue_depth = 64
 wait_timeout_secs = 0
 
 # Named voices are the primary abstraction. Each maps to a provider + provider-specific voice.
+# The key after "voices." (default, narrator, googler, ...) is the name you reference from
+# [tts].default_voice or the isimud.speak `voice` argument -- never the provider name itself.
 [voices.default]
 provider = "apple"
 voice = "Samantha" # Apple voice name/identifier; omit to use the macOS system default.
 
+# Example: a voice that routes to OpenAI. Set default_voice = "narrator" to use it by default.
 [voices.narrator]
 provider = "openai"
 voice = "onyx"
