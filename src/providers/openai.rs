@@ -104,3 +104,32 @@ impl TtsProvider for OpenAiProvider {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::OpenAiProviderConfig;
+
+    fn provider(api_key: Option<String>) -> OpenAiProvider {
+        OpenAiProvider::new(OpenAiProviderConfig::default(), api_key)
+    }
+
+    #[test]
+    fn kind_is_openai() {
+        assert_eq!(provider(None).kind(), ProviderKind::OpenAi);
+    }
+
+    #[tokio::test]
+    async fn availability_tracks_api_key_presence() {
+        assert!(!provider(None).is_available().await);
+        assert!(provider(Some("sk-test".to_string())).is_available().await);
+    }
+
+    #[tokio::test]
+    async fn list_voices_advertises_known_voices() {
+        let voices = provider(None).list_voices().await;
+        assert_eq!(voices.len(), KNOWN_VOICES.len());
+        assert!(voices.iter().any(|voice| voice.id == DEFAULT_VOICE));
+        assert!(voices.iter().all(|voice| voice.language.is_none()));
+    }
+}

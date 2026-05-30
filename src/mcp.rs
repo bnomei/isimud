@@ -416,8 +416,20 @@ impl ServerHandler for IsimudMcp {
 
 #[cfg(test)]
 mod tests {
-    use super::{SpeakParams, SpeakResult, StatusResult, StopResult};
+    use super::*;
+    use crate::state::JobOutcome;
+    use crate::voices::VoiceResolveError;
     use schemars::schema_for;
+
+    struct FakePeer {
+        closed: bool,
+    }
+
+    impl PeerHealth for FakePeer {
+        fn transport_closed(&self) -> bool {
+            self.closed
+        }
+    }
 
     #[test]
     fn tool_param_and_result_schemas_generate() {
@@ -425,5 +437,55 @@ mod tests {
         let _ = schema_for!(SpeakResult);
         let _ = schema_for!(StatusResult);
         let _ = schema_for!(StopResult);
+    }
+
+    #[test]
+    fn outcome_fields_maps_each_outcome() {
+        assert_eq!(outcome_fields(JobOutcome::Completed), (Some("completed".to_string()), None));
+        assert_eq!(outcome_fields(JobOutcome::Cancelled), (Some("cancelled".to_string()), None));
+        assert_eq!(
+            outcome_fields(JobOutcome::Failed { error: "boom".to_string() }),
+            (Some("failed".to_string()), Some("boom".to_string()))
+        );
+    }
+
+    #[test]
+    fn map_enqueue_error_uses_invalid_params_for_resolve() {
+        let error =
+            map_enqueue_error(EnqueueError::Resolve(VoiceResolveError::UnknownVoice("x".into())));
+        assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
+    }
+
+    #[test]
+    fn map_enqueue_error_uses_server_code_and_data_for_queue_full() {
+        let error = map_enqueue_error(EnqueueError::QueueFull { depth: 64, capacity: 64 });
+        assert_eq!(error.code, ErrorCode(QUEUE_FULL));
+        let data = error.data.expect("queue-full error carries data");
+        assert_eq!(data["queue_depth"], 64);
+        assert_eq!(data["capacity"], 64);
+    }
+
+    #[test]
+    fn prune_closed_peers_drops_only_closed() {
+        let mut peers =
+            vec![FakePeer { closed: false }, FakePeer { closed: true }, FakePeer { closed: false }];
+        prune_closed_peers(&mut peers);
+        assert_eq!(peers.len(), 2);
+        assert!(peers.iter().all(|peer| !peer.closed));
+    }
+
+    #[test]
+    fn enforce_peer_cap_drops_oldest_overflow() {
+        let mut peers = vec![1_u8, 2, 3, 4, 5];
+        enforce_peer_cap(&mut peers, 3);
+        assert_eq!(peers, vec![3, 4, 5]);
+        enforce_peer_cap(&mut peers, 10);
+        assert_eq!(peers, vec![3, 4, 5]);
+    }
+
+    #[test]
+    fn event_to_notification_wraps_custom_notification() {
+        let event = SpeechEvent::Finished { job_id: uuid::Uuid::nil(), queue_depth: 0 };
+        assert!(matches!(event_to_notification(&event), ServerNotification::CustomNotification(_)));
     }
 }

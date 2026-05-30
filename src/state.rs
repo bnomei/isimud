@@ -86,3 +86,63 @@ pub enum JobOutcome {
     Failed { error: String },
     Cancelled,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn job_id() -> Uuid {
+        Uuid::nil()
+    }
+
+    #[test]
+    fn is_speaking_reflects_variant() {
+        assert!(!SpeechState::Idle.is_speaking());
+        let speaking = SpeechState::Speaking {
+            job_id: job_id(),
+            voice: "alloy".to_string(),
+            provider: "openai".to_string(),
+        };
+        assert!(speaking.is_speaking());
+    }
+
+    #[test]
+    fn summary_covers_every_event_variant() {
+        let id = job_id();
+        assert_eq!(
+            SpeechEvent::Enqueued { job_id: id, queue_depth: 2 }.summary(),
+            format!("enqueued {id} (queue depth 2)")
+        );
+        assert_eq!(
+            SpeechEvent::Started {
+                job_id: id,
+                voice: "alloy".to_string(),
+                provider: "openai".to_string(),
+                text_preview: "hi".to_string(),
+                queue_depth: 0,
+            }
+            .summary(),
+            format!("speaking {id} via openai voice 'alloy'")
+        );
+        assert_eq!(
+            SpeechEvent::Finished { job_id: id, queue_depth: 0 }.summary(),
+            format!("finished {id}")
+        );
+        assert_eq!(
+            SpeechEvent::Failed { job_id: id, error: "boom".to_string(), queue_depth: 0 }.summary(),
+            format!("failed {id}: boom")
+        );
+        assert_eq!(
+            SpeechEvent::Stopped { cancelled_job: Some(id), cleared: 3 }.summary(),
+            format!("stopped {id}, cleared 3 queued")
+        );
+        assert_eq!(
+            SpeechEvent::Stopped { cancelled_job: None, cleared: 1 }.summary(),
+            "stopped (idle), cleared 1 queued"
+        );
+        assert_eq!(
+            SpeechEvent::Degraded { reason: "worker exited".to_string() }.summary(),
+            "degraded: worker exited"
+        );
+    }
+}

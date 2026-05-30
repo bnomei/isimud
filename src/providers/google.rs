@@ -121,3 +121,29 @@ impl TtsProvider for GoogleProvider {
         Vec::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::GoogleProviderConfig;
+
+    fn provider(api_key: Option<String>) -> GoogleProvider {
+        GoogleProvider::new(GoogleProviderConfig::default(), api_key)
+    }
+
+    #[test]
+    fn kind_is_google() {
+        assert_eq!(provider(None).kind(), ProviderKind::Google);
+    }
+
+    #[tokio::test]
+    async fn availability_tracks_api_key_presence() {
+        assert!(!provider(None).is_available().await);
+        assert!(provider(Some("key".to_string())).is_available().await);
+    }
+
+    #[tokio::test]
+    async fn list_voices_is_empty_best_effort() {
+        assert!(provider(None).list_voices().await.is_empty());
+    }
+}

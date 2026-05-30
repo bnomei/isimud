@@ -204,3 +204,138 @@ impl ProviderRegistry {
         out
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+
+    use crate::voices::ResolvedSpeech;
+
+    const ORDER: &[ProviderKind] =
+        &[ProviderKind::Apple, ProviderKind::OpenAi, ProviderKind::Google];
+
+    struct FakeProvider {
+        kind: ProviderKind,
+        available: bool,
+        voices: Vec<VoiceInfo>,
+    }
+
+    impl FakeProvider {
+        fn new(kind: ProviderKind, available: bool) -> Self {
+            Self { kind, available, voices: Vec::new() }
+        }
+    }
+
+    #[async_trait]
+    impl TtsProvider for FakeProvider {
+        fn kind(&self) -> ProviderKind {
+            self.kind
+        }
+        async fn is_available(&self) -> bool {
+            self.available
+        }
+        async fn synthesize(
+            &self,
+            _speech: &ResolvedSpeech,
+            _cancel: &CancelToken,
+        ) -> Result<SpeechOutput, ProviderError> {
+            Ok(SpeechOutput::PlayedInline)
+        }
+        async fn list_voices(&self) -> Vec<VoiceInfo> {
+            self.voices.clone()
+        }
+    }
+
+    fn registry(providers: Vec<FakeProvider>) -> ProviderRegistry {
+        let mut map: HashMap<ProviderKind, Arc<dyn TtsProvider>> = HashMap::new();
+        for provider in providers {
+            map.insert(provider.kind, Arc::new(provider));
+        }
+        ProviderRegistry::from_providers(map)
+    }
+
+    fn resolved(provider: ProviderKind, voice_id: Option<&str>) -> ResolvedSpeech {
+        ResolvedSpeech {
+            provider,
+            voice_name: "default".to_string(),
+            voice_id: voice_id.map(str::to_string),
+            language: None,
+            rate: 1.0,
+            pitch: None,
+            volume: 1.0,
+            text: "hi".to_string(),
+        }
+    }
+
+    #[test]
+    fn cancel_token_round_trips() {
+        let token = CancelToken::new();
+        assert!(!token.is_cancelled());
+        token.cancel();
+        assert!(token.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn select_uses_primary_when_available() {
+        let reg = registry(vec![FakeProvider::new(ProviderKind::OpenAi, true)]);
+        let (provider, used) = reg
+            .select(&resolved(ProviderKind::OpenAi, Some("alloy")), ORDER)
+            .await
+            .expect("primary selected");
+        assert_eq!(provider.kind(), ProviderKind::OpenAi);
+        assert_eq!(used.provider, ProviderKind::OpenAi);
+        assert_eq!(used.voice_id.as_deref(), Some("alloy"));
+    }
+
+    #[tokio::test]
+    async fn select_falls_back_when_primary_unavailable() {
+        let reg = registry(vec![
+            FakeProvider::new(ProviderKind::OpenAi, false),
+            FakeProvider::new(ProviderKind::Google, true),
+        ]);
+        let (provider, used) = reg
+            .select(&resolved(ProviderKind::OpenAi, Some("alloy")), ORDER)
+            .await
+            .expect("fallback selected");
+        assert_eq!(provider.kind(), ProviderKind::Google);
+        assert_eq!(used.provider, ProviderKind::Google);
+        assert_eq!(used.voice_id, None, "provider-specific voice id is dropped on fallback");
+    }
+
+    #[tokio::test]
+    async fn select_falls_back_when_primary_not_configured() {
+        let reg = registry(vec![FakeProvider::new(ProviderKind::Google, true)]);
+        let (provider, _used) = reg
+            .select(&resolved(ProviderKind::OpenAi, None), ORDER)
+            .await
+            .expect("fallback selected");
+        assert_eq!(provider.kind(), ProviderKind::Google);
+    }
+
+    #[tokio::test]
+    async fn select_returns_none_when_nothing_available() {
+        let reg = registry(vec![FakeProvider::new(ProviderKind::OpenAi, false)]);
+        assert!(reg.select(&resolved(ProviderKind::OpenAi, None), ORDER).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_kinds_and_list_all_voices_sorted() {
+        let mut openai = FakeProvider::new(ProviderKind::OpenAi, true);
+        openai.voices =
+            vec![VoiceInfo { id: "alloy".into(), name: "alloy".into(), language: None }];
+        let reg = registry(vec![openai, FakeProvider::new(ProviderKind::Google, true)]);
+
+        assert!(reg.get(ProviderKind::OpenAi).is_some());
+        assert!(reg.get(ProviderKind::Apple).is_none());
+
+        let mut kinds = reg.kinds();
+        kinds.sort_by_key(|kind| kind.as_str());
+        assert_eq!(kinds, vec![ProviderKind::Google, ProviderKind::OpenAi]);
+
+        let all = reg.list_all_voices().await;
+        assert_eq!(all[0].0, ProviderKind::Google);
+        assert_eq!(all[1].0, ProviderKind::OpenAi);
+        assert_eq!(all[1].1.len(), 1);
+    }
+}
