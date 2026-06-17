@@ -30,10 +30,8 @@ pub enum ServerError {
         #[source]
         source: std::net::AddrParseError,
     },
-    #[error("refusing to bind non-loopback address {0}: set [server].allow_remote = true")]
-    RemoteNotAllowed(SocketAddr),
-    #[error("refusing to bind non-loopback address {0} without an auth token (ISIMUD_AUTH_TOKEN or [server].auth_token)")]
-    InsecureRemote(SocketAddr),
+    #[error("refusing to bind non-loopback address {0}: isimud only supports loopback binding")]
+    NonLoopbackBind(SocketAddr),
     #[error("failed to initialize MCP service: {0}")]
     Mcp(#[from] McpInitError),
     #[error("server io error: {0}")]
@@ -54,15 +52,6 @@ pub async fn run_server(
     let config = engine.config();
     let addr = resolve_bind_addr(&config)?;
     let auth_token = config.resolved_auth_token();
-
-    if !addr.ip().is_loopback() {
-        if !config.server.allow_remote {
-            return Err(ServerError::RemoteNotAllowed(addr));
-        }
-        if auth_token.is_none() {
-            return Err(ServerError::InsecureRemote(addr));
-        }
-    }
 
     let mut shutdown_rx = shutdown_tx.subscribe();
     let service = IsimudMcp::streamable_http_service_with_shutdown(engine, shutdown_tx.clone())?;
@@ -105,7 +94,11 @@ fn resolve_bind_addr(config: &AppConfig) -> Result<SocketAddr, ServerError> {
         .host
         .parse::<std::net::IpAddr>()
         .map_err(|source| ServerError::BindAddr { host: config.server.host.clone(), source })?;
-    Ok(SocketAddr::new(ip, config.server.port))
+    let addr = SocketAddr::new(ip, config.server.port);
+    if !addr.ip().is_loopback() {
+        return Err(ServerError::NonLoopbackBind(addr));
+    }
+    Ok(addr)
 }
 
 async fn auth_middleware(State(auth): State<AuthState>, request: Request, next: Next) -> Response {
@@ -129,7 +122,7 @@ async fn auth_middleware(State(auth): State<AuthState>, request: Request, next: 
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_bind_addr;
+    use super::{resolve_bind_addr, ServerError};
     use crate::config::AppConfig;
 
     #[test]
@@ -138,6 +131,35 @@ mod tests {
         let addr = resolve_bind_addr(&config).expect("loopback should resolve");
         assert!(addr.ip().is_loopback());
         assert_eq!(addr.port(), crate::DEFAULT_PORT);
+    }
+
+    #[test]
+    fn resolve_bind_addr_accepts_ipv6_loopback() {
+        let mut config = AppConfig::default();
+        config.server.host = "::1".to_string();
+        let addr = resolve_bind_addr(&config).expect("IPv6 loopback should resolve");
+        assert!(addr.ip().is_loopback());
+        assert_eq!(addr.port(), crate::DEFAULT_PORT);
+    }
+
+    #[test]
+    fn resolve_bind_addr_rejects_non_loopback_ipv4() {
+        let mut config = AppConfig::default();
+        config.server.host = "0.0.0.0".to_string();
+        let error = resolve_bind_addr(&config).expect_err("wildcard bind should be rejected");
+        assert!(
+            matches!(error, ServerError::NonLoopbackBind(addr) if addr.to_string() == "0.0.0.0:3654")
+        );
+    }
+
+    #[test]
+    fn resolve_bind_addr_rejects_non_loopback_ipv6() {
+        let mut config = AppConfig::default();
+        config.server.host = "::".to_string();
+        let error = resolve_bind_addr(&config).expect_err("IPv6 wildcard bind should be rejected");
+        assert!(
+            matches!(error, ServerError::NonLoopbackBind(addr) if addr.to_string() == "[::]:3654")
+        );
     }
 
     #[test]

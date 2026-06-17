@@ -104,7 +104,7 @@ isimud loads `./.env` from the current working directory by default (disable wit
 | Apple TTS | none | Local macOS `say` + `AVSpeechSynthesisVoice`. No key required. |
 | OpenAI TTS | `OPENAI_API_KEY` | Falls back to `[providers.openai].api_key`. Endpoint and model are configurable. |
 | Google TTS | `GOOGLE_API_KEY` | Falls back to `[providers.google].api_key`. Endpoint and language are configurable. |
-| MCP auth | `ISIMUD_AUTH_TOKEN` | Optional bearer token; falls back to `[server].auth_token`. Required for remote binds. |
+| MCP auth | `ISIMUD_AUTH_TOKEN` | Optional bearer token for MCP requests; falls back to `[server].auth_token`. |
 | Config path | `ISIMUD_CONFIG` | Overrides the default config path resolution. |
 
 ## Quick Start
@@ -162,7 +162,6 @@ wait_timeout_secs = 0                       # seconds wait=true blocks; 0 = wait
 host = "127.0.0.1"
 port = 3654
 path = "/mcp"
-allow_remote = false                        # non-loopback bind requires an auth token
 
 [indicator.colors]
 idle = "#636366"                            # systemGray (matches muninn)
@@ -170,7 +169,7 @@ speaking_bright = "#30D158"                 # systemGreen pulse, bright phase
 speaking_dim = "#208A3A"                    # ~66% systemGreen, off phase
 ```
 
-The bind address is loopback-only unless `[server].allow_remote = true` **and** an auth token is set.
+The bind address must be loopback-only (`127.0.0.1` or `::1`); non-loopback addresses are rejected even when an auth token is configured.
 
 ### Live config reload
 

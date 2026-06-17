@@ -69,8 +69,6 @@ pub struct ServerConfig {
     /// Optional bearer token required on MCP requests. Empty/None = no auth.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_token: Option<String>,
-    /// Allow binding to a non-loopback address (requires `auth_token`).
-    pub allow_remote: bool,
 }
 
 impl Default for ServerConfig {
@@ -80,7 +78,6 @@ impl Default for ServerConfig {
             port: DEFAULT_PORT,
             path: "/mcp".to_string(),
             auth_token: None,
-            allow_remote: false,
         }
     }
 }

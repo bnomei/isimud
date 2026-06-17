@@ -12,8 +12,6 @@ autostart = false
 host = "127.0.0.1"
 port = 3654
 path = "/mcp"
-# Bind to a non-loopback address (requires auth_token). Loopback-only by default.
-allow_remote = false
 # Optional bearer token required on MCP requests. Empty = no auth (loopback only).
 # auth_token = "set via ISIMUD_AUTH_TOKEN"
 
