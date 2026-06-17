@@ -189,6 +189,16 @@ isimud serializes all speech through one worker and bounds the queue:
 
 Tracing logs go to stderr and are controlled with `RUST_LOG` (targets: `runtime`, `server`, `provider`, `config`, `speech`). Set the base level with `[logging].level`.
 
+## Speech Provider Operational Expectations
+
+These are current operational assumptions, not enforced runtime limits. isimud validates that `text` is non-empty, then forwards the utterance to the selected provider without imposing a fixed character, byte, or token cap.
+
+- **Expected text size:** `isimud.speak` is intended for short agent utterances such as status updates, confirmations, and concise paragraphs. Longer passages may work, but latency, provider rejection risk, and returned audio size grow with input length.
+- **Provider timeout behavior:** local Apple speech runs until `say` completes or the job is cancelled. Cloud provider calls rely on provider/client/network behavior; isimud does not currently add a separate synthesis request timeout. For blocking MCP calls, `[tts].wait_timeout_secs` only limits how long `wait=true` waits for the queued job outcome; it does not cancel synthesis when the wait result times out.
+- **Response-size risk:** cloud providers return audio bytes that are decoded and played by the shared playback path. Very long utterances can produce large responses, increasing memory use and decode/playback time. No maximum response byte size is enforced today.
+- **Queue behavior:** all speech is serialized through one worker. The active job is not counted in `[tts].max_queue_depth`; that setting caps only jobs waiting behind it, and `0` keeps the waiting queue unbounded.
+- **Rate assumptions:** speech `rate` is treated as a neutral multiplier where `1.0` is normal. Providers may interpret or clamp rates differently, and isimud does not enforce a provider-specific rate policy beyond resolving the configured/requested value.
+
 ## Packaging (macOS)
 
 ```sh
