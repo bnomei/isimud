@@ -301,15 +301,29 @@ async fn worker_loop(inner: Arc<EngineInner>) {
         if inner.shutdown.load(Ordering::SeqCst) {
             break;
         }
-        let job = {
+        let next = {
             let mut queue = lock_or_recover(&inner.queue, "queue");
-            queue.pop_front()
+            match queue.pop_front() {
+                Some(job) => {
+                    // Register the job as "current" with its cancel handle while still holding
+                    // the queue lock. This closes the dequeue→register race: a stop() can no
+                    // longer slip between pop_front() and registration to find an empty current
+                    // and empty queue, then cancel nothing while the utterance plays in full.
+                    let cancel = CancelToken::new();
+                    {
+                        let mut current = lock_or_recover(&inner.current, "current");
+                        *current = Some(CurrentJob { id: job.id, cancel: cancel.clone() });
+                    }
+                    Some((job, cancel))
+                }
+                None => None,
+            }
         };
-        match job {
-            Some(job) => {
+        match next {
+            Some((job, cancel)) => {
                 let job_id = job.id;
                 let waiter = job.waiter.clone();
-                let handle = tokio::spawn(process_job(inner.clone(), job));
+                let handle = tokio::spawn(process_job(inner.clone(), job, cancel));
                 if let Err(error) = handle.await {
                     let reason = format!("speech job {job_id} panicked or was aborted: {error}");
                     error!(target: TARGET_SPEECH, job_id = %job_id, %error, "speech job task failed");
@@ -347,14 +361,11 @@ fn handle_panicked_job(
     send_waiter(waiter, JobOutcome::Failed { error: reason });
 }
 
-async fn process_job(inner: Arc<EngineInner>, job: Job) {
+async fn process_job(inner: Arc<EngineInner>, job: Job, cancel: CancelToken) {
     let Job { id, resolved, preview, waiter } = job;
 
-    let cancel = CancelToken::new();
-    {
-        let mut current = lock_or_recover(&inner.current, "current");
-        *current = Some(CurrentJob { id, cancel: cancel.clone() });
-    }
+    // `cancel` and the `inner.current` registration are established by `worker_loop` under the
+    // queue lock before this task is spawned, so a racing stop() always observes this job.
     let remaining = lock_or_recover(&inner.queue, "queue").len();
 
     let registry = inner.registry.load_full();
