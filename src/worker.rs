@@ -204,17 +204,22 @@ impl SpeechEngine {
 
     /// Cancel the active job (if any) and clear the queue. Returns the emitted event.
     pub fn stop(&self) -> SpeechEvent {
-        let cancelled_job = {
-            let current = lock_or_recover(&self.inner.current, "current");
-            current.as_ref().map(|job| {
-                job.cancel.cancel();
-                job.id
-            })
-        };
-
-        let cleared: Vec<Job> = {
+        // Hold the queue lock across the current-job check (lock order: queue→current, the
+        // same order worker_loop uses). worker_loop moves a job from the queue into `current`
+        // atomically under the queue lock, so taking the queue lock here makes stop() atomic
+        // against that move: the just-dequeued job is always observed in exactly one of
+        // `queue` (drained) or `current` (cancelled), never missed in the gap between them.
+        let (cancelled_job, cleared) = {
             let mut queue = lock_or_recover(&self.inner.queue, "queue");
-            queue.drain(..).collect()
+            let cancelled_job = {
+                let current = lock_or_recover(&self.inner.current, "current");
+                current.as_ref().map(|job| {
+                    job.cancel.cancel();
+                    job.id
+                })
+            };
+            let cleared: Vec<Job> = queue.drain(..).collect();
+            (cancelled_job, cleared)
         };
         let cleared_count = cleared.len();
         for job in cleared {
@@ -282,8 +287,14 @@ impl SpeechEngine {
     /// Signal the worker to stop after the current job, cancelling any active playback.
     pub fn shutdown(&self) {
         self.inner.shutdown.store(true, Ordering::SeqCst);
-        if let Some(job) = lock_or_recover(&self.inner.current, "current").as_ref() {
-            job.cancel.cancel();
+        // Same atomicity as stop(): take the queue lock (queue→current order) so the worker
+        // cannot be mid-move of a just-dequeued job from the queue into `current` while we
+        // read `current`, which would otherwise let that job escape cancellation.
+        {
+            let _queue = lock_or_recover(&self.inner.queue, "queue");
+            if let Some(job) = lock_or_recover(&self.inner.current, "current").as_ref() {
+                job.cancel.cancel();
+            }
         }
         self.inner.notify.notify_one();
     }
