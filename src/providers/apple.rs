@@ -36,6 +36,11 @@ impl AppleProvider {
 
     /// Map a neutral rate multiplier (1.0 = normal) to a `say -r` words-per-minute value.
     fn words_per_minute(rate: f32) -> u32 {
+        // A NaN multiplier (e.g. a `rate = nan` TOML literal that bypasses the URL boundary
+        // guard) would slip through clamp() untouched — all its comparisons are false — and
+        // then `NaN as u32` saturates to 0, producing an invalid `say -r 0`. Fall back to the
+        // neutral multiplier so the result always lands in the [80, 500] WPM band.
+        let rate = if rate.is_nan() { 1.0 } else { rate };
         let wpm = (NEUTRAL_WPM * rate).round();
         wpm.clamp(80.0, 500.0) as u32
     }
@@ -140,5 +145,14 @@ mod tests {
     fn rate_is_clamped_to_say_bounds() {
         assert_eq!(AppleProvider::words_per_minute(0.01), 80);
         assert_eq!(AppleProvider::words_per_minute(100.0), 500);
+    }
+
+    #[test]
+    fn non_finite_rate_stays_in_band() {
+        // NaN must not slip through clamp() and saturate to `say -r 0`; it falls back to
+        // neutral. ±inf already clamp to the band bounds.
+        assert_eq!(AppleProvider::words_per_minute(f32::NAN), 175);
+        assert_eq!(AppleProvider::words_per_minute(f32::INFINITY), 500);
+        assert_eq!(AppleProvider::words_per_minute(f32::NEG_INFINITY), 80);
     }
 }

@@ -43,7 +43,9 @@ pub(crate) fn parse_speak_url(url: &str) -> Option<SpeakRequest> {
             match key.to_ascii_lowercase().as_str() {
                 "text" => query_text = Some(value),
                 "voice" if !value.trim().is_empty() => voice = Some(value),
-                "rate" => rate = value.trim().parse::<f32>().ok(),
+                // Reject non-finite literals (`nan`, `inf`, `-inf`) at this untrusted boundary;
+                // `parse::<f32>()` accepts them but they have no meaning as a rate multiplier.
+                "rate" => rate = value.trim().parse::<f32>().ok().filter(|r| r.is_finite()),
                 _ => {}
             }
         }
@@ -266,6 +268,17 @@ mod tests {
         assert_eq!(request.text, "Hi there");
         assert_eq!(request.voice.as_deref(), Some("narrator"));
         assert_eq!(request.rate, Some(1.25));
+    }
+
+    #[test]
+    fn rejects_non_finite_rate() {
+        // `nan`/`inf`/`-inf` parse as valid f32 but are meaningless multipliers; they must be
+        // dropped so the request falls back to the configured rate rather than reaching `say`.
+        for rate in ["nan", "inf", "-inf", "infinity", "NaN"] {
+            let request = parse_speak_url(&format!("isimud://speak/hello?rate={rate}"))
+                .expect("text is present so the request still parses");
+            assert_eq!(request.rate, None, "rate={rate} should be rejected");
+        }
     }
 
     #[test]
