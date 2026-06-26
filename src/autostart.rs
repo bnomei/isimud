@@ -1,7 +1,8 @@
-//! macOS LaunchAgent autostart sync (PLAN.md task 8).
+//! macOS LaunchAgent autostart sync.
 //!
-//! Installs/removes a per-user LaunchAgent plist so isimud can start at login, mirroring
-//! MUNINN's autostart behavior. Driven by `[app].autostart`.
+//! Installs or removes a per-user LaunchAgent plist so isimud can start at login when
+//! `[app].autostart` is true. Mirrors MUNINN's autostart layout (executable path,
+//! `ISIMUD_CONFIG`, and a Homebrew-friendly `PATH`).
 
 use std::path::{Path, PathBuf};
 

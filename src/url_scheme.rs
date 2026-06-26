@@ -1,11 +1,9 @@
 //! macOS `isimud://` custom URL scheme handler.
 //!
-//! Uses `NSAppleEventManager` (via raw `objc2` runtime messaging) to receive the
-//! `GetURL` Apple Event that LaunchServices dispatches when an `isimud://` link
-//! is opened, mirroring MUNINN's `muninn://` handler. The handler is only
-//! effective for the packaged `.app` that registers the scheme through
-//! `CFBundleURLTypes`. A parsed `isimud://speak/...` URL is enqueued as a
-//! [`SpeakRequest`] on the speech engine.
+//! Receives the `GetURL` Apple Event via `NSAppleEventManager` when an `isimud://` link is
+//! opened (requires a packaged `.app` with `CFBundleURLTypes`). Parsed `isimud://speak/...`
+//! URLs become [`SpeakRequest`]s delivered into the tray event loop. Registration must happen
+//! before the event loop runs to catch cold-launch URLs.
 
 use isimud::voices::SpeakRequest;
 
@@ -43,8 +41,6 @@ pub(crate) fn parse_speak_url(url: &str) -> Option<SpeakRequest> {
             match key.to_ascii_lowercase().as_str() {
                 "text" => query_text = Some(value),
                 "voice" if !value.trim().is_empty() => voice = Some(value),
-                // Reject non-finite literals (`nan`, `inf`, `-inf`) at this untrusted boundary;
-                // `parse::<f32>()` accepts them but they have no meaning as a rate multiplier.
                 "rate" => rate = value.trim().parse::<f32>().ok().filter(|r| r.is_finite()),
                 _ => {}
             }
@@ -272,8 +268,6 @@ mod tests {
 
     #[test]
     fn rejects_non_finite_rate() {
-        // `nan`/`inf`/`-inf` parse as valid f32 but are meaningless multipliers; they must be
-        // dropped so the request falls back to the configured rate rather than reaching `say`.
         for rate in ["nan", "inf", "-inf", "infinity", "NaN"] {
             let request = parse_speak_url(&format!("isimud://speak/hello?rate={rate}"))
                 .expect("text is present so the request still parses");

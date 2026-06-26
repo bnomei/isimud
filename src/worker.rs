@@ -1,7 +1,9 @@
-//! Serialized speech worker and job queue (PLAN.md task 4).
+//! Serialized speech queue, worker task, and engine API.
 //!
-//! A single background task drains a queue so utterances never overlap. Enqueue is
-//! fire-and-forget and returns a job id; callers may optionally wait until a job completes.
+//! A single background task drains the queue so utterances never overlap. Enqueue is
+//! fire-and-forget and returns a job id; callers may optionally wait for a terminal
+//! [`JobOutcome`]. Voice resolution happens at enqueue time; provider selection and playback
+//! run on the worker thread.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -204,11 +206,6 @@ impl SpeechEngine {
 
     /// Cancel the active job (if any) and clear the queue. Returns the emitted event.
     pub fn stop(&self) -> SpeechEvent {
-        // Hold the queue lock across the current-job check (lock order: queue→current, the
-        // same order worker_loop uses). worker_loop moves a job from the queue into `current`
-        // atomically under the queue lock, so taking the queue lock here makes stop() atomic
-        // against that move: the just-dequeued job is always observed in exactly one of
-        // `queue` (drained) or `current` (cancelled), never missed in the gap between them.
         let (cancelled_job, cleared) = {
             let mut queue = lock_or_recover(&self.inner.queue, "queue");
             let cancelled_job = {
@@ -249,27 +246,34 @@ impl SpeechEngine {
     }
 }
 
-/// The named voices configured in `[voices.*]`.
+/// A named voice entry from the `[voices.*]` configuration table.
 #[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
 pub struct NamedVoiceEntry {
+    /// Configured voice name (the `[voices.<name>]` key).
     pub name: String,
+    /// Backend assigned to this named voice.
     pub provider: ProviderKind,
+    /// Provider-specific voice id when configured.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub voice: Option<String>,
 }
 
-/// Combined view returned by `list_voices`.
+/// Combined catalog returned by `list_voices`: configured names plus per-provider voices.
 #[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
 pub struct VoiceCatalog {
+    /// Named voices from `[voices.*]`.
     pub named: Vec<NamedVoiceEntry>,
+    /// Best-effort voices advertised by each configured provider.
     pub providers: Vec<(ProviderKind, Vec<VoiceInfo>)>,
 }
 
 /// Errors raised while accepting a speech job into the queue.
 #[derive(Debug, Error)]
 pub enum EnqueueError {
+    /// The named voice or speak text failed validation before enqueue.
     #[error(transparent)]
     Resolve(#[from] VoiceResolveError),
+    /// `[tts].max_queue_depth` was exceeded (0 disables this limit).
     #[error("speech queue is full ({depth}/{capacity})")]
     QueueFull { depth: usize, capacity: usize },
 }
@@ -287,9 +291,6 @@ impl SpeechEngine {
     /// Signal the worker to stop after the current job, cancelling any active playback.
     pub fn shutdown(&self) {
         self.inner.shutdown.store(true, Ordering::SeqCst);
-        // Same atomicity as stop(): take the queue lock (queue→current order) so the worker
-        // cannot be mid-move of a just-dequeued job from the queue into `current` while we
-        // read `current`, which would otherwise let that job escape cancellation.
         {
             let _queue = lock_or_recover(&self.inner.queue, "queue");
             if let Some(job) = lock_or_recover(&self.inner.current, "current").as_ref() {
@@ -316,10 +317,6 @@ async fn worker_loop(inner: Arc<EngineInner>) {
             let mut queue = lock_or_recover(&inner.queue, "queue");
             match queue.pop_front() {
                 Some(job) => {
-                    // Register the job as "current" with its cancel handle while still holding
-                    // the queue lock. This closes the dequeue→register race: a stop() can no
-                    // longer slip between pop_front() and registration to find an empty current
-                    // and empty queue, then cancel nothing while the utterance plays in full.
                     let cancel = CancelToken::new();
                     {
                         let mut current = lock_or_recover(&inner.current, "current");
@@ -375,8 +372,6 @@ fn handle_panicked_job(
 async fn process_job(inner: Arc<EngineInner>, job: Job, cancel: CancelToken) {
     let Job { id, resolved, preview, waiter } = job;
 
-    // `cancel` and the `inner.current` registration are established by `worker_loop` under the
-    // queue lock before this task is spawned, so a racing stop() always observes this job.
     let remaining = lock_or_recover(&inner.queue, "queue").len();
 
     let registry = inner.registry.load_full();

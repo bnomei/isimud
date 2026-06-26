@@ -1,10 +1,9 @@
-//! Polling config-file watcher.
+//! Hot-reload watcher for the configuration file.
 //!
-//! Mirrors MUNINN's watcher: a background thread fingerprints the config file (mtime + length)
-//! and snapshots its contents, polling with a 250ms→2s backoff. On a real content change it
-//! parses + validates via [`AppConfig::from_toml_str`] and hands the [`ConfigReloadResult`] to a
-//! caller-supplied `on_change` handler (which routes it into the tray event loop or reloads the
-//! engine directly in headless mode).
+//! A background thread fingerprints the config path (mtime + length) and snapshots contents,
+//! polling with 250ms→2s backoff. On a real content change it parses and validates via
+//! [`AppConfig::from_toml_str`] and delivers a [`ConfigReloadResult`] to the caller (tray
+//! event loop in menubar mode, direct engine reload when headless).
 
 use std::fs;
 use std::path::{Path, PathBuf};

@@ -1,7 +1,8 @@
-//! Runtime shell wiring (PLAN.md task 8).
+//! Runtime shell: tokio, speech worker, MCP server, and tray event loop.
 //!
-//! Builds the tokio runtime, starts the speech worker and MCP/HTTP server, and runs the `tao`
-//! event loop for the tray. Supports `--headless` / `[app].menubar = false` (no tray).
+//! Wires the speech engine, config watcher, and HTTP server, then runs either the `tao` tray
+//! loop or a headless Ctrl-C wait. Tray mode bridges engine events, config reloads, URL
+//! scheme speaks, and tray clicks into the main-thread event loop.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -104,11 +105,6 @@ fn run_headless(
     });
     let mut server_handle = server_handle;
     runtime.block_on(async move {
-        // Race the shutdown signal against the server task. In headless mode the MCP/HTTP
-        // server is the whole product, so if it dies early (e.g. bind fails because the port
-        // is in use, or RemoteNotAllowed/InsecureRemote), surface the error and exit instead
-        // of blocking on Ctrl-C while serving nothing — mirroring the tray path's
-        // ServerStopped handling.
         tokio::select! {
             signal = tokio::signal::ctrl_c() => {
                 if let Err(error) = signal {

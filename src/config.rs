@@ -1,10 +1,9 @@
-//! Configuration loading and resolution (PLAN.md task 2).
+//! Configuration loading, validation, and secret resolution.
 //!
-//! Mirrors MUNINN's TOML + XDG path resolution and secrets handling. Sections:
-//! `[app] [server] [tts] [voices.*] [providers.*] [logging]`.
-//!
-//! Path precedence: `ISIMUD_CONFIG` -> `$XDG_CONFIG_HOME/isimud/config.toml`
-//! -> `~/.config/isimud/config.toml`.
+//! Mirrors MUNINN's TOML + XDG path layout. Sections: `[app]`, `[server]`, `[tts]`,
+//! `[voices.*]`, `[providers.*]`, `[logging]`, `[indicator]`. Path precedence:
+//! `ISIMUD_CONFIG` → `$XDG_CONFIG_HOME/isimud/config.toml` →
+//! `~/.config/isimud/config.toml`. Environment variables override inline secrets.
 
 use std::collections::BTreeMap;
 use std::env;
@@ -33,13 +32,20 @@ pub const ENV_GOOGLE_API_KEY: &str = "GOOGLE_API_KEY";
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct AppConfig {
+    /// Runtime and menu-bar behavior (`[app]`).
     pub app: AppSettings,
+    /// MCP streamable-HTTP server bind and auth (`[server]`).
     pub server: ServerConfig,
+    /// Global speech defaults and provider fallback order (`[tts]`).
     pub tts: TtsConfig,
+    /// Named voice table keyed by voice name (`[voices.<name>]`).
     #[serde(default)]
     pub voices: BTreeMap<String, VoiceConfig>,
+    /// Per-provider endpoints and credentials (`[providers.*]`).
     pub providers: ProvidersConfig,
+    /// Tracing verbosity (`[logging]`); `RUST_LOG` takes precedence at runtime.
     pub logging: LoggingConfig,
+    /// Menu-bar indicator colors (`[indicator]`).
     pub indicator: IndicatorConfig,
 }
 
@@ -63,8 +69,11 @@ impl Default for AppSettings {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct ServerConfig {
+    /// Bind IP address (loopback by default).
     pub host: String,
+    /// TCP port for the MCP HTTP server.
     pub port: u16,
+    /// URL path mounted for streamable MCP (default `/mcp`).
     pub path: String,
     /// Optional bearer token required on MCP requests. Empty/None = no auth.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -170,12 +179,16 @@ pub struct VoiceConfig {
     /// Provider-specific voice id/name. Omit to use the provider's default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voice: Option<String>,
+    /// BCP-47 language hint; falls back to the provider default when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
+    /// Per-voice speaking-rate multiplier override.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rate: Option<f32>,
+    /// Pitch multiplier (honored by Google; ignored by Apple `say`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pitch: Option<f32>,
+    /// Playback volume multiplier (honored by rodio; ignored by Apple `say`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub volume: Option<f32>,
 }
@@ -184,8 +197,11 @@ pub struct VoiceConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct ProvidersConfig {
+    /// macOS `say` backend settings (`[providers.apple]`).
     pub apple: AppleProviderConfig,
+    /// OpenAI speech API settings (`[providers.openai]`).
     pub openai: OpenAiProviderConfig,
+    /// Google Cloud TTS settings (`[providers.google]`).
     pub google: GoogleProviderConfig,
 }
 
@@ -202,10 +218,14 @@ pub struct AppleProviderConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct OpenAiProviderConfig {
+    /// API key; overridden by `OPENAI_API_KEY` when set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
+    /// Speech synthesis endpoint URL.
     pub endpoint: String,
+    /// TTS model id (e.g. `gpt-4o-mini-tts`).
     pub model: String,
+    /// Audio container requested from the API (e.g. `wav`).
     pub response_format: String,
 }
 
@@ -224,10 +244,14 @@ impl Default for OpenAiProviderConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct GoogleProviderConfig {
+    /// API key; overridden by `GOOGLE_API_KEY` when set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
+    /// `text:synthesize` endpoint URL.
     pub endpoint: String,
+    /// Default BCP-47 language when a voice does not specify one.
     pub language: String,
+    /// Requested audio encoding (e.g. `LINEAR16`).
     pub audio_encoding: String,
 }
 
@@ -246,6 +270,7 @@ impl Default for GoogleProviderConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct LoggingConfig {
+    /// Default tracing filter when `RUST_LOG` is unset (e.g. `info`).
     pub level: String,
 }
 
@@ -259,6 +284,7 @@ impl Default for LoggingConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct IndicatorConfig {
+    /// Menu-bar icon palette (`[indicator.colors]`).
     pub colors: IndicatorColorsConfig,
 }
 

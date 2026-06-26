@@ -1,7 +1,7 @@
-//! Audio playback via `rodio` (PLAN.md task 5).
+//! Shared rodio playback for cloud-provider audio bytes.
 //!
-//! Decodes and plays the WAV/MP3/PCM bytes returned by cloud providers. The Apple provider
-//! plays itself via the `say` CLI, so both paths share the same speech state/pulse.
+//! Decodes and plays WAV/MP3/PCM returned by OpenAI and Google. Apple bypasses this path
+//! (inline `say` playback) but still shares the same speech state and tray pulse.
 
 use std::io::Cursor;
 use std::time::Duration;

@@ -1,9 +1,7 @@
-//! Apple local TTS provider (PLAN.md task 6, macOS only).
+//! macOS local TTS via the `say` CLI and AVSpeech voice catalog.
 //!
-//! Synthesizes and plays speech via the macOS `say` CLI (cancellable, headless-safe, no run
-//! loop required) and enumerates installed voices natively through `objc2-avf-audio`
-//! `AVSpeechSynthesisVoice`. It plays its own audio, so it bypasses the rodio sink and cannot
-//! currently apply resolved volume or pitch.
+//! Synthesizes and plays inline (cancellable, headless-safe, no run loop). Voice enumeration
+//! uses `AVSpeechSynthesisVoice`. Bypasses rodio; resolved volume and pitch are not applied.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -36,10 +34,6 @@ impl AppleProvider {
 
     /// Map a neutral rate multiplier (1.0 = normal) to a `say -r` words-per-minute value.
     fn words_per_minute(rate: f32) -> u32 {
-        // A NaN multiplier (e.g. a `rate = nan` TOML literal that bypasses the URL boundary
-        // guard) would slip through clamp() untouched — all its comparisons are false — and
-        // then `NaN as u32` saturates to 0, producing an invalid `say -r 0`. Fall back to the
-        // neutral multiplier so the result always lands in the [80, 500] WPM band.
         let rate = if rate.is_nan() { 1.0 } else { rate };
         let wpm = (NEUTRAL_WPM * rate).round();
         wpm.clamp(80.0, 500.0) as u32
@@ -149,8 +143,6 @@ mod tests {
 
     #[test]
     fn non_finite_rate_stays_in_band() {
-        // NaN must not slip through clamp() and saturate to `say -r 0`; it falls back to
-        // neutral. ±inf already clamp to the band bounds.
         assert_eq!(AppleProvider::words_per_minute(f32::NAN), 175);
         assert_eq!(AppleProvider::words_per_minute(f32::INFINITY), 500);
         assert_eq!(AppleProvider::words_per_minute(f32::NEG_INFINITY), 80);
