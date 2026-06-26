@@ -102,16 +102,40 @@ fn run_headless(
             warn!(target: TARGET_RUNTIME, %reason, "config reload failed; keeping previous configuration");
         }
     });
+    let mut server_handle = server_handle;
     runtime.block_on(async move {
-        if let Err(error) = tokio::signal::ctrl_c().await {
-            error!(target: TARGET_RUNTIME, %error, "failed to listen for Ctrl-C");
-        }
-        info!(target: TARGET_RUNTIME, "shutdown signal received");
-        let _ = shutdown_tx.send(());
-        match server_handle.await {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => error!(target: TARGET_RUNTIME, %error, "MCP server error"),
-            Err(error) => error!(target: TARGET_RUNTIME, %error, "MCP server task join error"),
+        // Race the shutdown signal against the server task. In headless mode the MCP/HTTP
+        // server is the whole product, so if it dies early (e.g. bind fails because the port
+        // is in use, or RemoteNotAllowed/InsecureRemote), surface the error and exit instead
+        // of blocking on Ctrl-C while serving nothing — mirroring the tray path's
+        // ServerStopped handling.
+        tokio::select! {
+            signal = tokio::signal::ctrl_c() => {
+                if let Err(error) = signal {
+                    error!(target: TARGET_RUNTIME, %error, "failed to listen for Ctrl-C");
+                }
+                info!(target: TARGET_RUNTIME, "shutdown signal received");
+                let _ = shutdown_tx.send(());
+                match (&mut server_handle).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => error!(target: TARGET_RUNTIME, %error, "MCP server error"),
+                    Err(error) => error!(target: TARGET_RUNTIME, %error, "MCP server task join error"),
+                }
+            }
+            result = &mut server_handle => {
+                match result {
+                    Ok(Ok(())) => {
+                        warn!(target: TARGET_RUNTIME, "MCP server stopped unexpectedly; exiting")
+                    }
+                    Ok(Err(error)) => {
+                        error!(target: TARGET_RUNTIME, %error, "MCP server failed; exiting")
+                    }
+                    Err(error) => {
+                        error!(target: TARGET_RUNTIME, %error, "MCP server task join error; exiting")
+                    }
+                }
+                let _ = shutdown_tx.send(());
+            }
         }
         supervisor.abort();
     });
