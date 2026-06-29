@@ -1,7 +1,7 @@
-//! HTTP server wiring (PLAN.md task 7).
+//! Axum HTTP server wiring for streamable MCP.
 //!
-//! Mounts the `rmcp` `StreamableHttpService` (with `LocalSessionManager`) on an `axum` router
-//! at `/mcp`, bound to loopback by default, with a graceful-shutdown broadcast.
+//! Mounts `rmcp`'s `StreamableHttpService` on the configured path (default `/mcp`), binds
+//! loopback by default, enforces bearer auth for remote binds, and shuts down on broadcast.
 
 use std::net::SocketAddr;
 use std::sync::Arc;

@@ -1,7 +1,8 @@
-//! MCP handlers for isimud using `rmcp` (PLAN.md task 7).
+//! MCP tool handlers and speech-event notification fan-out.
 //!
-//! Exposes the `isimud.speak`, `isimud.stop`, `isimud.list_voices`, and `isimud.status` tools
-//! over streamable HTTP, and forwards speech-state notifications to connected peers.
+//! Exposes `isimud.speak`, `isimud.stop`, `isimud.list_voices`, and `isimud.status` over
+//! streamable HTTP via `rmcp`, and forwards [`SpeechEvent`]s to connected MCP peers as
+//! `isimud/speech_event` notifications.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -37,9 +38,10 @@ const MAX_MCP_PEERS: usize = 64;
 /// Server-defined JSON-RPC error code used when the speech queue is full.
 const QUEUE_FULL: i32 = -32010;
 
-/// Errors that can occur while initializing the MCP server.
+/// Errors raised while wiring the streamable HTTP MCP service.
 #[derive(Debug, thiserror::Error)]
 pub enum McpInitError {
+    /// The event forwarder could not spawn because no tokio runtime handle is available.
     #[error("tokio runtime not available")]
     NoRuntime,
 }

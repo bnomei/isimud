@@ -1,7 +1,8 @@
-//! Menu bar tray icon and pulse animation (PLAN.md task 8).
+//! Menu-bar tray icon, pulse animation, and event-loop bridge.
 //!
-//! Renders the `tray-icon` glyph icon and pulses it while isimud is speaking, idle otherwise,
-//! mirroring MUNINN's indicator renderer.
+//! Renders a filled-circle indicator and alternates bright/dim phases while speaking.
+//! Forwards speech events, config reloads, URL-scheme speaks, and tray clicks into the `tao`
+//! event loop as [`UserEvent`]s.
 
 use anyhow::{Context, Result};
 use isimud::config::{AppConfig, IndicatorColorsConfig};
@@ -32,14 +33,16 @@ pub enum UserEvent {
     ConfigReloadFailed(String),
 }
 
-/// Whether the indicator should render the idle or the active (speaking) appearance.
+/// Tray icon appearance driven by speech lifecycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IndicatorState {
+    /// Resting color; no active utterance.
     Idle,
+    /// Pulse animation while a job is synthesizing or playing.
     Speaking,
 }
 
-/// Live tray handle plus the menu items it owns (kept alive for the tray's lifetime).
+/// Live menu-bar tray handle and its color palette.
 pub struct Tray {
     icon: TrayIcon,
     colors: TrayColors,

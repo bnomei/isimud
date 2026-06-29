@@ -1,8 +1,7 @@
-//! Integration tests for the speech engine using an injected fake provider.
+//! Speech-engine integration tests with an injected fake provider.
 //!
-//! These exercise the provider-injection seam end-to-end (enqueue/wait, fire-and-forget,
-//! stop/cancel, queue-full backpressure, and degraded recovery on a panicking job) without
-//! emitting any audio.
+//! Exercises enqueue/wait, fire-and-forget, stop/cancel, queue-full backpressure, and
+//! degraded recovery when a job panics — without synthesizing or playing audio.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

@@ -1,7 +1,8 @@
-//! Google Cloud Text-to-Speech provider (PLAN.md task 6).
+//! Google Cloud Text-to-Speech backend.
 //!
-//! Calls `POST text:synthesize?key=...` requesting LINEAR16 audio, base64-decodes the
-//! `audioContent`, and hands it to the rodio playback sink. BYOK via `GOOGLE_API_KEY`.
+//! Calls `text:synthesize`, base64-decodes `audioContent`, and returns LINEAR16 bytes for
+//! rodio. Credentials resolve from `GOOGLE_API_KEY` with config fallback. Voice catalog
+//! enumeration is best-effort empty (named voices remain available via config).
 
 use async_trait::async_trait;
 use base64::Engine;

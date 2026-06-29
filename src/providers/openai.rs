@@ -1,7 +1,7 @@
-//! OpenAI TTS provider (PLAN.md task 6).
+//! OpenAI cloud TTS via the speech API.
 //!
-//! Calls `POST /v1/audio/speech` (`gpt-4o-mini-tts`) requesting WAV bytes, then hands them to
-//! the rodio playback sink. BYOK via `OPENAI_API_KEY` with config fallback.
+//! Calls `POST /v1/audio/speech`, requests WAV bytes, and returns them for rodio playback.
+//! Credentials resolve from `OPENAI_API_KEY` with config fallback.
 
 use async_trait::async_trait;
 use serde_json::json;

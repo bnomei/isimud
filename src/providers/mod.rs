@@ -1,7 +1,8 @@
-//! TTS provider abstraction and implementations (PLAN.md task 6).
+//! TTS provider trait, registry, and Apple/OpenAI/Google backends.
 //!
-//! Defines the `TtsProvider` trait and the Apple (local), OpenAI, and Google backends, plus
-//! local-first routing/fallback. Apple is macOS-only; cloud providers are cross-platform.
+//! Defines [`TtsProvider`] and [`ProviderRegistry`] for local-first routing with silent
+//! fallback when the preferred backend is unavailable. Apple is macOS-only; cloud providers
+//! return encoded bytes for the shared rodio sink.
 
 pub mod google;
 pub mod openai;
@@ -59,8 +60,11 @@ pub enum SpeechOutput {
 /// A voice advertised by a provider, surfaced through `list_voices`.
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct VoiceInfo {
+    /// Provider-specific voice id passed to synthesis.
     pub id: String,
+    /// Human-readable voice label.
     pub name: String,
+    /// BCP-47 language tag when known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
 }

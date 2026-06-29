@@ -1,7 +1,7 @@
 //! isimud binary entry point.
 //!
-//! Loads configuration, initializes logging, synchronizes macOS autostart, and hands off to
-//! the runtime shell (menu bar + MCP server, or headless MCP server).
+//! Resolves configuration, initializes tracing, syncs macOS autostart, and starts the runtime
+//! shell (menu bar + MCP server, or headless MCP-only mode via `--headless`).
 
 mod autostart;
 mod config_watch;

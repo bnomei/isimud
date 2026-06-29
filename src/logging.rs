@@ -1,7 +1,7 @@
-//! Logging initialization (PLAN.md task 2).
+//! Tracing subscriber initialization.
 //!
-//! stderr `fmt` layer plus per-target `oslog` layers on macOS, mirroring MUNINN. Honors
-//! `RUST_LOG` with isimud's tracing targets.
+//! stderr `fmt` layer plus per-target `oslog` layers on macOS. Honors `RUST_LOG`, falling
+//! back to `[logging].level`, and routes records into isimud's named tracing targets.
 
 use anyhow::{anyhow, Result};
 use isimud::AppConfig;

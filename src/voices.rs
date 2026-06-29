@@ -1,9 +1,9 @@
-//! Named-voice resolution (PLAN.md task 3).
+//! Named-voice resolution from agent requests into provider parameters.
 //!
-//! Resolves a `SpeakRequest` into a concrete provider + provider-specific voice id using the
-//! `[voices.<name>]` table, `[tts].default_voice`, and the `[tts].providers` fallback order.
-//! Cloud-provider audio volume is applied in the shared rodio playback path; Apple `say`
-//! playback cannot currently honor volume, and only Google receives a pitch parameter.
+//! Maps a [`SpeakRequest`] through `[voices.<name>]` and `[tts].default_voice` into a
+//! [`ResolvedSpeech`] with effective rate, volume, and pitch. Provider fallback order is
+//! applied later in the registry; volume reaches rodio for cloud audio but not Apple `say`,
+//! and pitch is honored only by Google.
 
 use thiserror::Error;
 

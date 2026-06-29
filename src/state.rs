@@ -1,7 +1,7 @@
-//! Speech state machine and event bus (PLAN.md task 3).
+//! Speech state machine, status snapshots, and lifecycle events.
 //!
-//! Tracks whether isimud is idle or speaking a given job, so the menu bar can pulse and the
-//! MCP server can report status / forward notifications.
+//! Tracks idle vs speaking for the menu-bar pulse and MCP `status` tool. The worker broadcasts
+//! [`SpeechEvent`]s to subscribers (tray animation, MCP peer notifications).
 
 use serde::Serialize;
 use uuid::Uuid;
@@ -27,8 +27,11 @@ impl SpeechState {
 /// A point-in-time view of the engine, returned by the `status` tool.
 #[derive(Debug, Clone, Serialize)]
 pub struct StatusSnapshot {
+    /// Current idle or speaking state.
     pub state: SpeechState,
+    /// Jobs waiting behind the active utterance.
     pub queue_depth: usize,
+    /// Whether the speech subsystem needs user attention (worker panic, etc.).
     pub degraded: bool,
 }
 
@@ -78,12 +81,15 @@ impl SpeechEvent {
     }
 }
 
-/// Outcome reported back to a caller that requested `wait = true`.
+/// Terminal outcome reported to a caller that used `wait = true` or `enqueue_and_wait`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum JobOutcome {
+    /// Synthesis and playback finished without error.
     Completed,
+    /// The job failed during provider selection, synthesis, or playback.
     Failed { error: String },
+    /// The job was cancelled by `stop` or superseded shutdown.
     Cancelled,
 }
 
