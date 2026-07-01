@@ -7,51 +7,162 @@
 [![Discord](https://flat.badgen.net/badge/discord/bnomei?color=7289da&icon=discord&label)](https://discordapp.com/users/bnomei)
 [![Buymecoffee](https://flat.badgen.net/badge/icon/donate?icon=buymeacoffee&color=FF813F&label)](https://www.buymeacoffee.com/bnomei)
 
-**isimud** is a macOS menu bar app and [MCP](https://modelcontextprotocol.io) server that lets AI agents **speak**. An agent sends text to an MCP tool; isimud resolves a named voice, synthesizes it through a local or cloud provider, and plays it aloud through a single serialized speech queue.
+**isimud** is a macOS menu bar app and streamable-HTTP [MCP](https://modelcontextprotocol.io) server that lets AI agents speak. An agent sends text to an MCP tool; isimud resolves a named voice, synthesizes speech through Apple, OpenAI, or Google, then plays it through a single serialized speech queue.
 
-It is the functional inverse of [muninn](https://github.com/bnomei/muninn) (speech-to-text). Where muninn turns your voice into text for an agent, isimud turns an agent's text into voice. Named after Isimud, the two-faced messenger god of Enki.
+isimud is the text-to-speech counterpart to [muninn](https://github.com/bnomei/muninn), which turns speech into text for agents.
 
-isimud is:
-- a local macOS menu bar app whose tray pulses while speaking, with a `--headless` mode for a pure server
-- an MCP streamable-HTTP server exposing `speak`, `stop`, `list_voices`, and `status` tools to any MCP client
-- BYOK by design: you bring provider keys; isimud routes across Apple local TTS, OpenAI, and Google with local-first fallback
+Use isimud when you want:
 
-## What isimud Does
+- A local macOS tray app that pulses while an agent is speaking.
+- A headless MCP server for scripted or background use.
+- Local-first text-to-speech with optional bring-your-own-key cloud providers.
+- Named voices that hide provider-specific voice IDs from agents.
+- Queueing, cancellation, status, and speech lifecycle notifications over MCP.
 
-High-level flow:
+## Quickstart
 
-`agent calls isimud.speak -> resolve named voice -> pick first available provider -> synthesize audio -> enqueue on serialized speech worker -> play aloud -> broadcast lifecycle events`
+Complete this path to run isimud with the local Apple text-to-speech provider. Apple TTS does not require an API key.
 
-A single speech worker plays one utterance at a time. `speak` is fire-and-forget by default (returns a job id immediately) or blocking (`wait=true`). Every job transition is broadcast as a `SpeechEvent` to the tray (for the pulse animation) and to connected MCP peers (as notifications).
+### Prerequisites
 
-The current app supports:
-- a live menu bar tray that pulses while speaking, or headless server-only operation
-- an MCP streamable-HTTP endpoint on `127.0.0.1:3654/mcp` (3654 = T9 for *ENKI*)
-- named voices that hide provider-specific voice identifiers behind friendly names
-- ordered provider routing with availability checks and silent fallback (with loud logging)
-- a bounded, serialized speech queue with backpressure and degraded-health supervision
-- macOS LaunchAgent autostart
+- macOS. The project is macOS-only; the packaged app declares macOS 12.0 or newer.
+- Rust 1.89 or newer and Cargo.
+- An MCP client that supports streamable HTTP.
 
-## MCP Tools
+### Install
 
-| Tool | Description | Key params |
-|------|-------------|------------|
-| `isimud.speak` | Enqueue speech; returns a `job_id` and `queue_depth`. | `text`, optional `voice`, `rate`, `wait` |
-| `isimud.stop` | Cancel the active utterance and clear the queue. | — |
-| `isimud.list_voices` | List configured named voices plus per-provider voices. | — |
-| `isimud.status` | Report speech state, active job, queue depth, and health. | — |
+Install the published binary crate:
 
-`isimud.speak` returns `{ job_id, queue_depth }`. With `wait=true` it also returns an `outcome` (`completed` / `failed` / `cancelled` / `timeout`) and, on failure, an `error`. When the queue is full the call is rejected with JSON-RPC error code `-32010` and a `{ queue_depth, capacity }` data payload.
+```bash
+cargo install isimud-text-to-speech
+```
 
-`isimud.status` returns `{ state, job_id?, voice?, provider?, queue_depth, degraded }`, where `state` is `idle` or `speaking` and `degraded` flags that the speech subsystem needs attention.
+Verify that Cargo installed the `isimud` binary:
 
-Speech lifecycle events are forwarded to connected MCP peers as `isimud/speech_event` custom notifications. Event variants: `enqueued`, `started`, `finished`, `failed`, `stopped`, and `degraded`.
+```bash
+isimud --version
+```
 
-## Named Voices & Providers
+Or build from this repository:
 
-Named voices are the primary abstraction. A `[voices.<name>]` block maps a friendly name to a provider plus that provider's voice id, so agents never deal with provider-specific identifiers.
+```bash
+cargo build --release --bin isimud
+./target/release/isimud --version
+```
+
+### Configure
+
+isimud creates a launchable default config on first run if no config file exists. That generated config contains a single Apple-backed `default` voice. To start from the full sample config instead, create the config directory and copy the sample:
+
+```bash
+mkdir -p ~/.config/isimud
+cp configs/config.sample.toml ~/.config/isimud/config.toml
+```
+
+Config path precedence is:
+
+1. `ISIMUD_CONFIG`
+2. `$XDG_CONFIG_HOME/isimud/config.toml`
+3. `~/.config/isimud/config.toml`
+
+### Run
+
+Start the menu bar app and MCP server:
+
+```bash
+isimud
+```
+
+For server-only operation:
+
+```bash
+isimud --headless
+```
+
+CLI options:
+
+```txt
+--headless     Run only the MCP server
+-h, --help     Print help
+-V, --version  Print the version
+```
+
+Expected result:
+
+- In menu bar mode, a small isimud indicator appears in the macOS menu bar.
+- The MCP server listens on `http://127.0.0.1:3654/mcp`.
+- Calling `isimud.status` from your MCP client returns `state: "idle"` when nothing is speaking.
+
+## Connect an MCP client
+
+Configure your MCP client with streamable HTTP transport:
+
+```txt
+URL: http://127.0.0.1:3654/mcp
+```
+
+If you set `ISIMUD_AUTH_TOKEN` or `[server].auth_token`, add this request header:
+
+```txt
+Authorization: Bearer <TOKEN>
+```
+
+The server only binds to loopback IP addresses. `127.0.0.1` and `::1` are accepted; hostnames such as `localhost` and non-loopback addresses such as `0.0.0.0` are rejected at startup.
+
+When auth is configured, requests without the exact bearer token return HTTP `401`.
+
+## Speak from an agent
+
+Call `isimud.speak` with text:
+
+```json
+{
+  "text": "Build finished.",
+  "voice": "default",
+  "rate": 1.0
+}
+```
+
+The call returns immediately by default:
+
+```json
+{
+  "job_id": "00000000-0000-0000-0000-000000000000",
+  "queue_depth": 0
+}
+```
+
+Set `wait` to `true` when the MCP caller should block until the utterance completes, fails, is cancelled, or reaches `[tts].wait_timeout_secs`:
+
+```json
+{
+  "text": "Deployment complete.",
+  "wait": true
+}
+```
+
+With `wait=true`, the response includes `outcome`:
+
+```json
+{
+  "job_id": "00000000-0000-0000-0000-000000000000",
+  "queue_depth": 0,
+  "outcome": "completed"
+}
+```
+
+## Configure voices and providers
+
+Named voices are the public voice contract for agents. The `voice` argument to `isimud.speak` and `[tts].default_voice` must match a `[voices.<name>]` key.
 
 ```toml
+[tts]
+providers = ["apple", "openai", "google"]
+default_voice = "default"
+rate = 1.0
+max_queue_depth = 64
+wait_timeout_secs = 0
+
 [voices.default]
 provider = "apple"
 voice = "Samantha"
@@ -66,165 +177,199 @@ voice = "en-US-Neural2-C"
 language = "en-US"
 ```
 
-> **`default_voice` is a voice name, not a provider name.** `[tts].default_voice` (and the `voice` argument to `isimud.speak`) must match one of the `[voices.<name>]` keys above — e.g. `default`, `narrator`, or `googler`. Setting `default_voice = "openai"` fails with `unknown voice 'openai'` unless a `[voices.openai]` block exists. To make OpenAI the default for a plain `speak(text)`, point `default_voice` at a voice whose `provider = "openai"` (such as `narrator`), or add your own `[voices.<name>]` block mapped to that provider.
+Important: `default_voice` is a voice name, not a provider name. To make OpenAI the default, set `default_voice = "narrator"` or create another `[voices.<name>]` block whose `provider = "openai"`.
 
-Providers and their routing:
-- **Apple** — local, no API key. Synthesizes through the macOS `say` CLI (cancellable, headless-safe) and enumerates installed voices natively via `AVSpeechSynthesisVoice`. It plays its own audio, so it honors `rate` but **cannot apply volume or pitch** (logged once when requested).
-- **OpenAI** — `POST /v1/audio/speech`; set `OPENAI_API_KEY`.
-- **Google** — Google Cloud TTS `text:synthesize`; set `GOOGLE_API_KEY`.
+Optional per-voice fields are `language`, `rate`, `pitch`, and `volume`. A request `rate` overrides the voice `rate`, which overrides `[tts].rate`; voice `volume` defaults to `1.0`.
 
-`[tts].providers` is the availability / fallback order. When a named voice's provider is unavailable (for example a missing key), isimud falls back to the next available provider with a loud log line rather than failing silently.
+Provider availability follows `[tts].providers`. If the requested voice's provider is unavailable, isimud selects the first available fallback provider and drops the provider-specific voice ID for that fallback utterance. If no provider is available, the job fails and emits a `failed` event.
 
-### OpenAI voices
+### Provider setup
 
-Set the `voice` of a `provider = "openai"` block to one of the following ids. Styles are approximate character descriptions:
-
-| Voice | Style |
-| --- | --- |
-| `alloy` | neutral, balanced |
-| `ash` | clear, articulate |
-| `ballad` | smooth, melodic |
-| `cedar` | warm, grounded |
-| `coral` | vibrant, warm |
-| `echo` | precise, resonant |
-| `fable` | expressive, storyteller |
-| `marin` | natural, conversational |
-| `nova` | energetic, bright |
-| `onyx` | deep, authoritative |
-| `sage` | calm, measured |
-| `shimmer` | cheerful, light |
-| `verse` | poetic, expressive |
-
-## BYOK & Provider Setup
-
-isimud loads `./.env` from the current working directory by default (disable with `ISIMUD_LOAD_DOTENV=0`). Shell environment variables win over `.env` and config values.
-
-| Concern | Variables | Notes |
+| Provider | Credentials | Behavior |
 | --- | --- | --- |
-| Apple TTS | none | Local macOS `say` + `AVSpeechSynthesisVoice`. No key required. |
-| OpenAI TTS | `OPENAI_API_KEY` | Falls back to `[providers.openai].api_key`. Endpoint and model are configurable. |
-| Google TTS | `GOOGLE_API_KEY` | Falls back to `[providers.google].api_key`. Endpoint and language are configurable. |
-| MCP auth | `ISIMUD_AUTH_TOKEN` | Optional bearer token for MCP requests; falls back to `[server].auth_token`. |
-| Config path | `ISIMUD_CONFIG` | Overrides the default config path resolution. |
+| Apple | None | Uses the macOS `say` command, plays inline, and enumerates installed voices with `AVSpeechSynthesisVoice`. |
+| OpenAI | `OPENAI_API_KEY` or `[providers.openai].api_key` | Calls `POST /v1/audio/speech`, requests the configured response format, and plays returned audio through `rodio`. |
+| Google | `GOOGLE_API_KEY` or `[providers.google].api_key` | Calls Google Cloud Text-to-Speech `text:synthesize`, decodes `audioContent`, and plays returned audio through `rodio`. |
 
-## Quick Start
+OpenAI and Google send a rate/speed value only when the resolved rate is within `0.25..=4.0`. Google sends pitch only when the resolved pitch is within `-20..=20`.
 
-### 1) Build the app
+OpenAI built-in voice IDs exposed by `isimud.list_voices`:
 
-```sh
-cargo build --release
+```txt
+alloy ash ballad cedar coral echo fable marin nova onyx sage shimmer verse
 ```
 
-### 2) Resolve the config path
+Google voice listing is intentionally best-effort and currently returns an empty provider catalog; configured named Google voices still work.
 
-Config file precedence:
-- `ISIMUD_CONFIG`
-- `$XDG_CONFIG_HOME/isimud/config.toml`
-- `~/.config/isimud/config.toml`
+## Configuration reference
 
-On first run isimud writes a launchable default config to the resolved path. To start from the sample explicitly:
+See [configs/config.sample.toml](configs/config.sample.toml) for the full sample.
 
-```sh
-cp configs/config.sample.toml ~/.config/isimud/config.toml
+| Setting | Default | Description |
+| --- | --- | --- |
+| `[app].menubar` | `true` | Runs the macOS tray app. `--headless` disables the tray for that process. |
+| `[app].autostart` | `false` | Syncs a per-user macOS LaunchAgent that starts the current executable at login. |
+| `[server].host` | `"127.0.0.1"` | Loopback bind host. Must parse as an IP address. |
+| `[server].port` | `3654` | MCP HTTP port. |
+| `[server].path` | `"/mcp"` | MCP streamable-HTTP path. |
+| `[server].auth_token` | unset | Optional bearer token. `ISIMUD_AUTH_TOKEN` takes precedence. |
+| `[tts].providers` | `["apple", "openai", "google"]` | Provider fallback order. |
+| `[tts].default_voice` | `"default"` | Name of the default `[voices.<name>]` entry. |
+| `[tts].rate` | `1.0` | Neutral speaking-rate multiplier. |
+| `[tts].max_queue_depth` | `64` | Number of jobs allowed behind the active utterance. `0` disables the limit. |
+| `[tts].wait_timeout_secs` | `0` | Timeout for `wait=true` calls. `0` waits forever. |
+| `[indicator.colors.*]` | Apple system gray/green palette | Menu bar indicator colors. Values must be `#RRGGBB` hex strings. |
+
+The TOML schema is strict. Unknown fields fail config parsing; hot reload keeps the previous config when a changed file fails to parse or validate.
+
+Environment variables:
+
+| Variable | Purpose |
+| --- | --- |
+| `ISIMUD_CONFIG` | Overrides config path resolution. |
+| `ISIMUD_AUTH_TOKEN` | Overrides `[server].auth_token`. |
+| `ISIMUD_LOAD_DOTENV=0` | Disables startup loading of `./.env` from the current working directory. Also accepts `false` or `no`. |
+| `OPENAI_API_KEY` | Enables the OpenAI provider. |
+| `GOOGLE_API_KEY` | Enables the Google provider. |
+| `RUST_LOG` | Overrides `[logging].level`; useful targets are `runtime`, `server`, `provider`, `config`, and `speech`. |
+
+Shell environment variables win over `.env` and config-file secrets.
+
+## MCP tool reference
+
+| Tool | Parameters | Result |
+| --- | --- | --- |
+| `isimud.speak` | `text` required; optional `voice`, `rate`, `wait` | `job_id`, `queue_depth`; with `wait=true`, also `outcome` and optional `error`. |
+| `isimud.stop` | none | Cancels the active job if present and clears queued jobs. Returns `cancelled_job` and `cleared`. |
+| `isimud.list_voices` | none | Lists configured named voices and provider voice catalogs. |
+| `isimud.status` | none | Returns `state`, active `job_id`, `voice`, `provider`, `queue_depth`, and `degraded`. |
+
+`isimud.speak` rejects empty text and unknown named voices as invalid parameters. When the queue is full, it returns JSON-RPC error code `-32010` with this data payload:
+
+```json
+{
+  "queue_depth": 64,
+  "capacity": 64
+}
 ```
 
-### 3) Set provider env vars (optional)
+Connected MCP peers receive `isimud/speech_event` custom notifications for these lifecycle events:
 
-```sh
-export OPENAI_API_KEY="sk-..."   # only if you use the openai provider
-export GOOGLE_API_KEY="..."      # only if you use the google provider
+```txt
+enqueued started finished failed stopped degraded
 ```
 
-Apple voices work with no keys at all.
+Custom MCP requests named `isimud/quit` or `isimud/exit` trigger graceful shutdown.
 
-### 4) Run
+## Runtime behavior
 
-```sh
-./target/release/isimud            # menu bar tray + MCP server
-./target/release/isimud --headless # MCP server only
+isimud runs one speech worker. Jobs never overlap; each accepted utterance waits for the current utterance to finish or be cancelled.
+
+The active job does not count toward `[tts].max_queue_depth`. That setting only limits jobs waiting behind the active utterance.
+
+Saving the config file hot-reloads the speech engine and tray palette. Valid changes update voices, provider credentials, speaking rates, queue settings, and tray colors without a restart. Invalid edits are logged and the previous config stays active.
+
+Server bind settings (`[server].host`, `[server].port`, `[server].path`, and auth) and LaunchAgent autostart sync are applied at startup. Restart isimud after changing those settings.
+
+The macOS tray icon is gray while idle and pulses green while speaking. If the speech worker exits unexpectedly or a job panics, `isimud.status` reports `degraded: true` and a `degraded` event is broadcast.
+
+## macOS app features
+
+### URL scheme
+
+The packaged app registers the `isimud://` URL scheme. Use it to enqueue speech from macOS links or automation:
+
+```txt
+isimud://speak/Hello%20world
+isimud://speak?text=Hello%20world&voice=narrator&rate=1.25
 ```
 
-Point your MCP client at `http://127.0.0.1:3654/mcp` and call `isimud.speak`.
+The path text takes precedence over the `text` query parameter when both are present. The URL scheme is available when running the packaged `.app` that includes the `CFBundleURLTypes` entry.
 
-## Configuration
+### Tray click
 
-See [`configs/config.sample.toml`](configs/config.sample.toml) for the full schema.
+In menu bar mode, a left click on the tray icon tries to run the optional `fortune` command and speak its output. If `fortune` is not installed or returns no text, the click is ignored and a warning is logged.
 
-```toml
-[tts]
-providers = ["apple", "openai", "google"] # availability / fallback order
-default_voice = "default"                  # a [voices.<name>] key below, NOT a provider name
-rate = 1.0                                  # neutral multiplier (1.0 = normal)
-max_queue_depth = 64                        # jobs allowed behind the active one; 0 = unbounded
-wait_timeout_secs = 0                       # seconds wait=true blocks; 0 = wait forever
+### Autostart
 
-[server]
-host = "127.0.0.1"
-port = 3654
-path = "/mcp"
+Set `[app].autostart = true` to sync a per-user LaunchAgent at `~/Library/LaunchAgents/com.bnomei.isimud.plist`. The LaunchAgent uses the current executable path and sets `ISIMUD_CONFIG` to the resolved config path.
 
-[indicator.colors]
-idle = "#636366"                            # systemGray (matches muninn)
-speaking_bright = "#30D158"                 # systemGreen pulse, bright phase
-speaking_dim = "#208A3A"                    # ~66% systemGreen, off phase
-```
+When running the packaged `.app`, prefer macOS Login Items if you want app-style launch behavior.
 
-The bind address must be loopback-only (`127.0.0.1` or `::1`); non-loopback addresses are rejected even when an auth token is configured.
+## Packaging
 
-### Live config reload
+Build a release binary for a target:
 
-isimud watches the config file and applies changes without a restart. Saving the file hot-swaps
-the running configuration via an `ArcSwap`, so tray icon colors (`[indicator.colors]`, validated as
-`#RRGGBB` hex), named voices, rates, and provider credentials all take effect on the next utterance.
-Invalid edits are rejected with a logged warning and the previous config is kept.
-
-## Backpressure & Observability
-
-isimud serializes all speech through one worker and bounds the queue:
-- `[tts].max_queue_depth` caps jobs waiting behind the active utterance. When full, `isimud.speak` is rejected with JSON-RPC code `-32010` and a `{ queue_depth, capacity }` payload. Set `0` for unbounded fire-and-forget.
-- `[tts].wait_timeout_secs` bounds how long a `wait=true` call blocks; `0` waits forever. On timeout the result `outcome` is `timeout`.
-- A supervisor marks the engine **degraded** if the speech worker panics or exits unexpectedly, broadcasting a `degraded` event and surfacing `degraded: true` in `isimud.status`.
-- Lifecycle events (`enqueued` / `started` / `finished` / `failed` / `stopped` / `degraded`) are broadcast to the tray and to MCP peers.
-
-Tracing logs go to stderr and are controlled with `RUST_LOG` (targets: `runtime`, `server`, `provider`, `config`, `speech`). Set the base level with `[logging].level`.
-
-## Speech Provider Operational Expectations
-
-These are current operational assumptions, not enforced runtime limits. isimud validates that `text` is non-empty, then forwards the utterance to the selected provider without imposing a fixed character, byte, or token cap.
-
-- **Expected text size:** `isimud.speak` is intended for short agent utterances such as status updates, confirmations, and concise paragraphs. Longer passages may work, but latency, provider rejection risk, and returned audio size grow with input length.
-- **Provider timeout behavior:** local Apple speech runs until `say` completes or the job is cancelled. Cloud provider calls rely on provider/client/network behavior; isimud does not currently add a separate synthesis request timeout. For blocking MCP calls, `[tts].wait_timeout_secs` only limits how long `wait=true` waits for the queued job outcome; it does not cancel synthesis when the wait result times out.
-- **Response-size risk:** cloud providers return audio bytes that are decoded and played by the shared playback path. Very long utterances can produce large responses, increasing memory use and decode/playback time. No maximum response byte size is enforced today.
-- **Queue behavior:** all speech is serialized through one worker. The active job is not counted in `[tts].max_queue_depth`; that setting caps only jobs waiting behind it, and `0` keeps the waiting queue unbounded.
-- **Rate assumptions:** speech `rate` is treated as a neutral multiplier where `1.0` is normal. Providers may interpret or clamp rates differently, and isimud does not enforce a provider-specific rate policy beyond resolving the configured/requested value.
-
-## Packaging (macOS)
-
-```sh
+```bash
 TARGET=aarch64-apple-darwin scripts/build-release.sh
-scripts/package-macos-app.sh   # builds dist/Isimud.app (+ .zip)
 ```
 
-Enable login autostart with `[app].autostart = true`; isimud writes a LaunchAgent using the current executable path. When running the packaged `.app`, prefer macOS Login Items over the raw LaunchAgent.
+Build a macOS app bundle and zip archive from an existing release binary:
 
-## Local Pre-commit
+```bash
+TARGET=aarch64-apple-darwin scripts/package-macos-app.sh
+```
 
-This repo ships a native `prek.toml` for fast local gates before you commit.
+If you built the default host target with `cargo build --release --bin isimud`, run `scripts/package-macos-app.sh` without `TARGET`.
 
-```sh
-prek run --all-files
+Useful packaging variables:
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `BIN_NAME` | `isimud` | Binary name copied into the app bundle. |
+| `PRODUCT_NAME` | `Isimud` | App bundle product name. |
+| `BUNDLE_IDENTIFIER` | `com.bnomei.isimud` | macOS bundle identifier. |
+| `TARGET` | unset | Selects `target/<TARGET>/release/isimud` as the binary path. |
+| `BIN_PATH` | unset | Explicit binary path. Overrides `TARGET`. |
+| `ICON_PATH` | `packaging/macos/Isimud.icns` | Optional icon copied into the app bundle when present. |
+| `CODESIGN_APP` | `1` | Ad-hoc signs with `codesign --sign -`. Set to `0` if `codesign` is unavailable. |
+| `ZIP_APP` | `1` | Set to `0` to skip zip creation. |
+
+Create a tarball release archive from a built target:
+
+```bash
+VERSION=$(scripts/resolve-version.sh) TARGET=aarch64-apple-darwin scripts/package-release.sh
+```
+
+## Development
+
+Run the main checks:
+
+```bash
+cargo test
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+```
+
+This repository also includes [prek](https://github.com/j178/prek) hooks:
+
+```bash
 prek install
+prek run --all-files
 ```
 
-The hooks stay intentionally small: `cargo fmt --all -- --check` and `cargo clippy --all-targets --all-features -- -D warnings`.
+## Current limits
 
-## Current Limits
+- macOS is the only supported platform.
+- The MCP server supports streamable HTTP only; there is no stdio transport.
+- The server binds only to loopback addresses.
+- Apple `say` honors `rate` but does not apply `volume` or `pitch`.
+- OpenAI and Google request timeouts are left to the HTTP client and provider/network behavior. `[tts].wait_timeout_secs` only limits how long an MCP `wait=true` call waits for the job outcome; it does not cancel synthesis.
+- isimud validates that `text` is non-empty, but it does not enforce a fixed character, byte, token, or provider response-size limit.
+- Cloud-provider audio is decoded and played in memory, so very long utterances can increase memory use and playback latency.
 
-- isimud currently supports macOS only.
-- The Apple `say` provider honors `rate` but cannot apply `volume` or `pitch`.
-- Provider fallback is silent substitution with loud logging; there is no per-call provider pinning beyond the named voice.
-- The MCP server is streamable-HTTP only; there is no stdio transport.
+## Source map
+
+- Configuration loading and defaults: [src/config.rs](src/config.rs)
+- MCP tools and notification fan-out: [src/mcp.rs](src/mcp.rs)
+- HTTP server and loopback/auth enforcement: [src/server.rs](src/server.rs)
+- Named voice resolution: [src/voices.rs](src/voices.rs)
+- Speech queue and worker: [src/worker.rs](src/worker.rs)
+- Provider registry and fallback: [src/providers/mod.rs](src/providers/mod.rs)
+- macOS tray behavior: [src/runtime_tray.rs](src/runtime_tray.rs)
+- URL scheme parsing: [src/url_scheme.rs](src/url_scheme.rs)
+- macOS app bundle template: [packaging/macos/Info.plist.template](packaging/macos/Info.plist.template)
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).
